@@ -12,7 +12,7 @@
 <body>
   <div id="map"></div>
   <script>
-    const ENDPOINT     = 'https://script.google.com/macros/s/AKfycbwgu-hYl5R4-7jHlFj78lX0kTZWtqHEEwVDxf7bYgFSYXA3uOONgm1wxwgkhU9FAD08/exec';
+    const ENDPOINT     = 'https://script.google.com/macros/s/.../exec';
     const INITIAL_ZOOM = 12;
     const CENTER_FALLBACK = { lat: 36.3526, lng: -94.2755 };
 
@@ -23,9 +23,9 @@
       map = new google.maps.Map(document.getElementById('map'), {
         center: CENTER_FALLBACK,
         zoom: INITIAL_ZOOM,
-        mapTypeId: 'hybrid',        // <-- hybrid: satellite + labels
+        mapTypeId: 'hybrid',
         disableDefaultUI: false,
-        gestureHandling: 'none'
+        gestureHandling: 'greedy'
       });
       infoWindow = new google.maps.InfoWindow();
       fetchAndPlot();
@@ -33,58 +33,51 @@
     }
 
     async function fetchAndPlot() {
-      try {
-        const url = `${ENDPOINT}?json=true&limit=1&t=${Date.now()}`;
-        const res = await fetch(url);
-        const arr = await res.json();
-        if (!arr.length) return;
-        const pt  = arr[0];
-        const pos = { lat: pt.latitude, lng: pt.longitude };
+      const res = await fetch(`${ENDPOINT}?json=true&limit=1&t=${Date.now()}`);
+      const [pt] = await res.json();
+      if (!pt) return;
 
-        // build a larger icon
-        const icon = {
-          url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
-          scaledSize: new google.maps.Size(48, 48)  // 48×48 px
-        };
+      const pos = { lat: pt.latitude, lng: pt.longitude };
 
-        if (marker) {
-          marker.setPosition(pos);
-        } else {
-          marker = new google.maps.Marker({
-            position: pos,
-            map,
-            icon,
-            label: {
-              text: pt.device,      // show device name
-              color: '#ffffff',
-              fontWeight: 'bold',
-              fontSize: '18px'
-            }
-          });
-          marker.addListener('hover', () => showInfo(pt, marker));
-        }
+      // large icon with labelOrigin above the marker
+      const icon = {
+        url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
+        scaledSize: new google.maps.Size(48, 48),
+        labelOrigin: new google.maps.Point(24, -10)
+      };
 
-        if (firstLoad) {
-          map.setCenter(pos);
-          map.setZoom(INITIAL_ZOOM);
-          firstLoad = false;
-        }
-
-        showInfo(pt, marker);
-
-      } catch (err) {
-        console.error('Fetch/plot error', err);
+      if (marker) {
+        marker.setPosition(pos);
+      } else {
+        marker = new google.maps.Marker({
+          position: pos,
+          map,
+          icon,
+          label: {
+            text: pt.device,
+            color: '#fff',
+            fontSize: '14px',
+            fontWeight: 'bold'
+          }
+        });
+        marker.addListener('click', () => showInfo(pt, marker));
       }
+
+      if (firstLoad) {
+        map.setCenter(pos);
+        map.setZoom(INITIAL_ZOOM);
+        firstLoad = false;
+      }
+
+      showInfo(pt, marker);
     }
 
     function showInfo(pt, marker) {
-      const time = new Date(pt.timestamp).toLocaleString();
-      const content = `
-        <div style="font-size:18px;">
+      infoWindow.setContent(`
+        <div style="font-size:14px">
           <strong>${pt.device}</strong><br>
-          ${time}
-        </div>`;
-      infoWindow.setContent(content);
+          ${new Date(pt.timestamp).toLocaleString()}
+        </div>`);
       infoWindow.open(map, marker);
     }
 

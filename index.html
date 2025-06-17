@@ -21,6 +21,7 @@
       width: 100%;
       margin-bottom: 8px;
       font-size: 14px;
+      padding: 5px;
     }
   </style>
   <script src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_API_KEY"></script>
@@ -92,7 +93,11 @@
             }
           });
 
+          // Show details on hover
+          marker.addListener('mouseover', () => showInfo(pt, marker));
+          marker.addListener('mouseout', () => infoWindow.close());
           marker.addListener('click', () => showInfo(pt, marker));
+
           markersArray.push(marker);
           markersByName[pt.device] = marker;
 

@@ -2,184 +2,70 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Live Angler Tracker</title>
-  <meta name="viewport" content="initial-scale=1.0,user-scalable=no"/>
+  <title>Angler Overlay</title>
   <style>
-    html, body, #map { margin:0; padding:0; width:100%; height:100%; }
-    .sidebar {
-      position: absolute;
-      top: 80px;
-      left: 10px;
-      background: rgba(255, 255, 255, 0.95);
-      padding: 10px;
-      border-radius: 5px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-      z-index: 5;
-      font-family: Arial, sans-serif;
-    }
-    .sidebar select, .sidebar button {
+    /* Make the page itself transparent and fill the container */
+    html, body {
+      margin: 0;
+      padding: 0;
       width: 100%;
-      margin-bottom: 8px;
-      font-size: 14px;
-      padding: 5px;
+      height: 100%;
+      background: transparent !important;
+      overflow: hidden;
+    }
+    /* Full-screen map */
+    #map {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
     }
   </style>
-  <script src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_API_KEY"></script>
-  <script src="https://unpkg.com/@googlemaps/markerclustererplus/dist/index.min.js"></script>
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAIfCWstMFLCiR9VJMS6lePKoytUgy1qPY"></script>
 </head>
 <body>
   <div id="map"></div>
-  <div class="sidebar">
-    <select id="anglerDropdown"><option value="">-- Select Angler --</option></select>
-    <button onclick="toggleTrail()">Toggle Trail</button>
-    <button onclick="fitBounds()">Fit Bounds</button>
-  </div>
-  <script>
-    const ENDPOINT = 'https://script.google.com/macros/s/AKfycbwgu-hYl5R4-7jHlFj78lX0kTZWtqHEEwVDxf7bYgFSYXA3uOONgm1wxwgkhU9FAD08/exec';
-    const INITIAL_ZOOM = 12;
-    const CENTER_FALLBACK = { lat: 36.3526, lng: -94.2755 };
 
-    let map, infoWindow, firstLoad = true;
-    let trailCoords = [], trailPolyline = null, trailVisible = true;
-    const markersByName = {};
-    let markerCluster = null;
+  <script>
+    let map;
+    const markers = {};
 
     function initMap() {
-      map = new google.maps.Map(document.getElementById('map'), {
-        center: CENTER_FALLBACK,
-        zoom: INITIAL_ZOOM,
-        mapTypeId: 'hybrid',
-        disableDefaultUI: false,
-        gestureHandling: 'greedy'
+      map = new google.maps.Map(document.getElementById("map"), {
+        center: { lat: 36.3526, lng: -94.2755 },
+        zoom: 12,
+        /* Disable all default map UI so nothing overlaps your video */
+        disableDefaultUI: true,
+        /* Optional: Prevent user panning/zooming if you like */
+        gestureHandling: 'none'
       });
-      infoWindow = new google.maps.InfoWindow();
-      fetchAndPlot();
-      setInterval(fetchAndPlot, 10000);
+      fetchAndUpdate();
+      setInterval(fetchAndUpdate, 15000);
     }
 
-    async function fetchAndPlot() {
+    async function fetchAndUpdate() {
       try {
-        const res = await fetch(`${ENDPOINT}?json=true&t=${Date.now()}`);
-        const arr = await res.json();
-        if (!arr.length) return;
-
-        const markersArray = [];
-        const dropdown = document.getElementById('anglerDropdown');
-        dropdown.innerHTML = '<option value="">-- Select Angler --</option>';
-
-        arr.forEach(pt => {
-          const pos = { lat: pt.latitude, lng: pt.longitude };
-          let marker = markersByName[pt.device];
-          if (marker) {
-            marker.setPosition(pos);
-            marker.pt = pt;  // update latest data
-          } else {
-            marker = new google.maps.Marker({
-              position: pos,
-              map,
-              icon: {
-                url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
-                scaledSize: new google.maps.Size(48, 48),
-                anchor: new google.maps.Point(24, 48),
-                labelOrigin: new google.maps.Point(24, 0)
-              },
-              label: {
-                text: pt.device,
-                color: '#ffffff',
-                fontSize: '14px',
-                fontWeight: 'bold'
-              }
-            });
-            marker.pt = pt;
-            marker.addListener('mouseover', () => showInfo(marker));
-            marker.addListener('mouseout', () => infoWindow.close());
-            marker.addListener('click', () => showInfo(marker));
-            markersByName[pt.device] = marker;
-          }
-          markersArray.push(marker);
-
-          // Dropdown
-          const option = document.createElement('option');
-          option.value = pt.device;
-          option.text = pt.device;
-          dropdown.appendChild(option);
-
-          // Trail coords
-          trailCoords.push(pos);
+        const res = await fetch("https://your-traccar-server.com/api/positions", {
+          headers: { 'Authorization': 'Basic ' + btoa('readOnlyUser:password') }
         });
-
-        // Cluster
-        if (!markerCluster) {
-          markerCluster = new MarkerClusterer(map, markersArray);
-        } else {
-          markerCluster.clearMarkers();
-          markerCluster.addMarkers(markersArray);
-        }
-
-        // Trail polyline
-        if (trailVisible) {
-          if (!trailPolyline) {
-            trailPolyline = new google.maps.Polyline({
-              path: trailCoords,
-              geodesic: true,
-              strokeColor: '#00F',
-              strokeOpacity: 0.6,
-              strokeWeight: 4,
-              map
-            });
+        const data = await res.json();
+        data.forEach(pos => {
+          const id = pos.deviceId;
+          const latLng = { lat: pos.latitude, lng: pos.longitude };
+          if (markers[id]) {
+            markers[id].setPosition(latLng);
           } else {
-            trailPolyline.setPath(trailCoords);
-            trailPolyline.setMap(map);
+            markers[id] = new google.maps.Marker({
+              position: latLng,
+              map: map,
+              title: `Angler ${id}`,
+              icon: "https://maps.google.com/mapfiles/ms/icons/blue-dot.png"
+            });
           }
-        }
-
-        // First load center
-        if (firstLoad) {
-          map.setCenter(trailCoords[0] || CENTER_FALLBACK);
-          map.setZoom(INITIAL_ZOOM);
-          firstLoad = false;
-        }
-
-        dropdown.onchange = function() {
-          const selected = markersByName[this.value];
-          if (selected) map.setCenter(selected.getPosition());
-        };
-
-      } catch (err) {
-        console.error('Fetch error', err);
+        });
+      } catch (e) {
+        console.error("Overlay fetch error:", e);
       }
-    }
-
-    function showInfo(marker) {
-      const pt = marker.pt;
-      const when = new Date(pt.timestamp).toLocaleString();
-      // fishCaught details
-      let fishHtml = '';
-      if (pt.fishCaught) {
-        for (const [type, count] of Object.entries(pt.fishCaught)) {
-          fishHtml += `<div>${type}: ${count}</div>`;
-        }
-      }
-      const content = `
-        <div style="font-size:14px; max-width:200px;">
-          <strong>${pt.device}</strong><br>
-          ${when}
-          <hr style="margin:4px 0;">
-          ${fishHtml}
-        </div>`;
-      infoWindow.setContent(content);
-      infoWindow.open(map, marker);
-    }
-
-    function toggleTrail() {
-      trailVisible = !trailVisible;
-      if (trailPolyline) trailPolyline.setMap(trailVisible ? map : null);
-    }
-
-    function fitBounds() {
-      const bounds = new google.maps.LatLngBounds();
-      Object.values(markersByName).forEach(m => bounds.extend(m.getPosition()));
-      map.fitBounds(bounds);
     }
 
     window.onload = initMap;

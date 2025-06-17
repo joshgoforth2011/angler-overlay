@@ -2,178 +2,176 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Live Angler Tracker + Trail Playback</title>
-  <meta name="viewport" content="initial-scale=1.0, user-scalable=no"/>
+  <title>Live Angler Tracker</title>
+  <meta name="viewport" content="initial-scale=1.0,user-scalable=no"/>
   <style>
     html, body, #map { margin:0; padding:0; width:100%; height:100%; }
-    .sidebar {
-      position: absolute;
-      top: 60px; left: 10px;
-      background: rgba(255,255,255,0.9);
-      padding: 10px;
-      z-index: 5;
-      font-family: Arial;
+    .map-control {
+      background: #fff;
+      border: 1px solid #000;
+      margin: 10px;
+      padding: 5px 10px;
+      cursor: pointer;
+      font-family: Arial, sans-serif;
       font-size: 14px;
-      border-radius: 4px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-    }
-    .sidebar select, .sidebar button {
-      margin-top: 5px;
-      width: 100%;
     }
   </style>
+  <!-- Google Maps JS -->
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAIfCWstMFLCiR9VJMS6lePKoytUgy1qPY"></script>
+  <!-- MarkerClusterer library -->
+  <script src="https://unpkg.com/@googlemaps/markerclustererplus/dist/index.min.js"></script>
 </head>
 <body>
   <div id="map"></div>
-  <div class="sidebar">
-    <button onclick="toggleTrail()">Toggle Trail</button>
-    <button onclick="fitBounds()">Fit Bounds</button>
-    <button onclick="togglePlayback()">Play/Pause Trail</button>
-    <input type="range" id="timeSlider" min="0" max="100" value="0" style="width:100%" oninput="sliderMoved()" />
-  </div>
-
   <script>
-    const ENDPOINT = 'https://script.google.com/macros/s/AKfycbzUuSXVnDgNVmR3lVH9X2ovAeahJnSWCe6oQXzxPGEefBCq-AL0pMMb853zApv7KNDa/exec';
-    const INITIAL_ZOOM = 12;
+    const ENDPOINT       = 'https://script.google.com/macros/s/AKfycbzUuSXVnDgNVmR3lVH9X2ovAeahJnSWCe6oQXzxPGEefBCq-AL0pMMb853zApv7KNDa/exec'; // e.g. https://script.google.com/macros/s/.../exec
+    const INITIAL_ZOOM   = 12;
     const CENTER_FALLBACK = { lat: 36.3526, lng: -94.2755 };
 
-    let map, infoWindow;
-    let markers = {};     // { device: marker }
-    let trails = {};      // { device: [LatLng, ...] }
-    let trailPolylines = {}; // { device: Polyline }
-    let playbackTimer = null;
-    let playbackStep = 0;
-    let playbackActive = false;
-    let timestamps = [];
-    let trailHistory = {}; // { timestamp: { device: LatLng } }
+    let map, marker, infoWindow;
+    let firstLoad = true;
+    const trailCoords   = [];
+    let trailPolyline   = null;
+    const markersArray  = [];
+    let markerCluster   = null;
+    let trailVisible    = false;
 
     function initMap() {
       map = new google.maps.Map(document.getElementById('map'), {
         center: CENTER_FALLBACK,
         zoom: INITIAL_ZOOM,
-        mapTypeId: 'hybrid',
+        mapTypeId: 'hybrid',       // satellite + labels
         disableDefaultUI: false,
-        gestureHandling: 'greedy'
+        gestureHandling: 'greedy'  // allow drag & scroll
       });
       infoWindow = new google.maps.InfoWindow();
-      fetchTrailData();
+
+      // Add controls
+      map.controls[google.maps.ControlPosition.TOP_LEFT].push(
+        createControl('Toggle Trail', toggleTrail)
+      );
+      map.controls[google.maps.ControlPosition.TOP_LEFT].push(
+        createControl('Fit Bounds', fitBounds)
+      );
+
+      fetchAndPlot();
+      setInterval(fetchAndPlot, 10000);  // refresh every 10s
     }
 
-    async function fetchTrailData() {
+    // Build a custom button
+    function createControl(label, cb) {
+      const div = document.createElement('div');
+      div.className = 'map-control';
+      div.textContent = label;
+      div.addEventListener('click', cb);
+      return div;
+    }
+
+    // Fetch latest point & plot
+    async function fetchAndPlot() {
       try {
-        const url = `${ENDPOINT}?json=true&since=1h&t=${Date.now()}`;
-        const res = await fetch(url);
-        const data = await res.json();
+        const res = await fetch(`${ENDPOINT}?json=true&limit=1&t=${Date.now()}`);
+        const arr = await res.json();
+        if (!arr.length) return;
+        const pt  = arr[0];
+        const pos = { lat: pt.latitude, lng: pt.longitude };
 
-        // Group by timestamp
-        trailHistory = {}; trails = {}; timestamps = [];
+        // Add to trail history
+        trailCoords.push(pos);
 
-        data.forEach(pt => {
-          const ts = pt.timestamp;
-          const key = pt.device;
-          if (!trailHistory[ts]) trailHistory[ts] = {};
-          trailHistory[ts][key] = { lat: pt.latitude, lng: pt.longitude };
-          if (!trails[key]) trails[key] = [];
-          trails[key].push({ lat: pt.latitude, lng: pt.longitude });
-        });
+        // Custom icon with label above
+        const icon = {
+          url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
+          scaledSize: new google.maps.Size(48, 48),
+          anchor: new google.maps.Point(24, 48),     // bottom-center
+          labelOrigin: new google.maps.Point(24, 0)  // top-center
+        };
 
-        timestamps = Object.keys(trailHistory).sort();
-        document.getElementById('timeSlider').max = timestamps.length - 1;
-        drawCurrent();
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    function drawCurrent() {
-      for (let key in trails) {
-        const last = trails[key][trails[key].length - 1];
-        if (!markers[key]) {
-          markers[key] = new google.maps.Marker({
-            position: last,
-            map: map,
-            title: key,
-            icon: {
-              url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
-              scaledSize: new google.maps.Size(48,48),
-              anchor: new google.maps.Point(24,48),
-              labelOrigin: new google.maps.Point(24,0)
-            },
+        // Create or move marker
+        if (marker) {
+          marker.setPosition(pos);
+        } else {
+          marker = new google.maps.Marker({
+            position: pos,
+            map,
+            icon,
             label: {
-              text: key,
+              text: pt.device,
               color: '#ffffff',
+              fontSize: '14px',
               fontWeight: 'bold'
             }
           });
-          markers[key].addListener('click', () => {
-            infoWindow.setContent(`<strong>${key}</strong>`);
-            infoWindow.open(map, markers[key]);
+          marker.addListener('click', () => showInfo(pt));
+          markersArray.push(marker);
+        }
+
+        // Update clustering
+        if (!markerCluster) {
+          markerCluster = new MarkerClusterer(map, markersArray, {
+            imagePath: 'https://developers.google.com/maps/documentation/javascript/examples/markerclusterer/m'
           });
         } else {
-          markers[key].setPosition(last);
+          markerCluster.clearMarkers();
+          markerCluster.addMarkers(markersArray);
         }
 
-        // Draw polyline
-        if (!trailPolylines[key]) {
-          trailPolylines[key] = new google.maps.Polyline({
-            path: trails[key],
+        // Center & zoom once
+        if (firstLoad) {
+          map.setCenter(pos);
+          map.setZoom(INITIAL_ZOOM);
+          firstLoad = false;
+        }
+
+      } catch (err) {
+        console.error('Fetch/plot error', err);
+      }
+    }
+
+    // Toggle the trail polyline
+    function toggleTrail() {
+      if (trailVisible) {
+        trailPolyline.setMap(null);
+      } else {
+        if (!trailPolyline) {
+          trailPolyline = new google.maps.Polyline({
+            path: trailCoords,
             geodesic: true,
             strokeColor: '#00F',
-            strokeOpacity: 0.5,
-            strokeWeight: 4,
-            map: map
+            strokeOpacity: 0.6,
+            strokeWeight: 4
           });
         }
+        trailPolyline.setMap(map);
       }
+      trailVisible = !trailVisible;
     }
 
-    function toggleTrail() {
-      const visible = trailPolylines[Object.keys(trailPolylines)[0]]?.getMap();
-      for (let key in trailPolylines) {
-        trailPolylines[key].setMap(visible ? null : map);
-      }
-    }
-
+    // Fit map to all markers
     function fitBounds() {
+      if (!markersArray.length) return;
       const bounds = new google.maps.LatLngBounds();
-      for (let key in markers) bounds.extend(markers[key].getPosition());
+      markersArray.forEach(m => bounds.extend(m.getPosition()));
       map.fitBounds(bounds);
     }
 
-    function togglePlayback() {
-      playbackActive = !playbackActive;
-      if (playbackActive) {
-        playbackTimer = setInterval(stepPlayback, 500);
-      } else {
-        clearInterval(playbackTimer);
+    // InfoWindow on click, showing fish-caught details
+    function showInfo(pt) {
+      const when = new Date(pt.timestamp).toLocaleString();
+      // Build fishCaught HTML
+      let fishHtml = '';
+      for (let fishType in pt.fishCaught) {
+        fishHtml += `<div>${fishType}: ${pt.fishCaught[fishType]}</div>`;
       }
-    }
-
-    function stepPlayback() {
-      if (playbackStep >= timestamps.length) {
-        clearInterval(playbackTimer);
-        playbackActive = false;
-        return;
-      }
-      updatePlaybackMarkers(timestamps[playbackStep]);
-      document.getElementById('timeSlider').value = playbackStep;
-      playbackStep++;
-    }
-
-    function sliderMoved() {
-      playbackStep = parseInt(document.getElementById('timeSlider').value);
-      updatePlaybackMarkers(timestamps[playbackStep]);
-    }
-
-    function updatePlaybackMarkers(ts) {
-      const positions = trailHistory[ts];
-      for (let key in positions) {
-        const pos = positions[key];
-        if (markers[key]) {
-          markers[key].setPosition(pos);
-        }
-      }
+      const content = `
+        <div style="font-size:14px; max-width:220px;">
+          <strong>${pt.device}</strong><br>
+          ${when}
+          <hr style="margin:4px 0;">
+          ${fishHtml}
+        </div>`;
+      infoWindow.setContent(content);
+      infoWindow.open(map, marker);
     }
 
     window.onload = initMap;

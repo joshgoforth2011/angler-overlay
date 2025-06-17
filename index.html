@@ -30,9 +30,7 @@
 <body>
   <div id="map"></div>
   <div class="sidebar">
-    <select id="anglerDropdown">
-      <option value="">-- Select Angler --</option>
-    </select>
+    <select id="anglerDropdown"><option value="">-- Select Angler --</option></select>
     <button onclick="toggleTrail()">Toggle Trail</button>
     <button onclick="fitBounds()">Fit Bounds</button>
   </div>
@@ -43,7 +41,8 @@
 
     let map, infoWindow, firstLoad = true;
     let trailCoords = [], trailPolyline = null, trailVisible = true;
-    let markersArray = [], markerCluster = null, markersByName = {};
+    const markersByName = {};
+    let markerCluster = null;
 
     function initMap() {
       map = new google.maps.Map(document.getElementById('map'), {
@@ -60,53 +59,57 @@
 
     async function fetchAndPlot() {
       try {
-        const res = await fetch(`${ENDPOINT}?json=true&limit=5&t=${Date.now()}`);
+        const res = await fetch(`${ENDPOINT}?json=true&t=${Date.now()}`);
         const arr = await res.json();
         if (!arr.length) return;
 
-        // clear existing markers
-        markersArray.forEach(m => m.setMap(null));
-        markersArray = [];
-        markersByName = {};
-
+        // Update or create markers
+        const markersArray = [];
         const dropdown = document.getElementById('anglerDropdown');
         dropdown.innerHTML = '<option value="">-- Select Angler --</option>';
 
         arr.forEach(pt => {
           const pos = { lat: pt.latitude, lng: pt.longitude };
-          const icon = {
-            url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
-            scaledSize: new google.maps.Size(48, 48),
-            anchor: new google.maps.Point(24, 48),
-            labelOrigin: new google.maps.Point(24, 0)
-          };
-
-          const marker = new google.maps.Marker({
-            position: pos,
-            map: map,
-            icon: icon,
-            label: {
-              text: pt.device,
-              color: '#ffffff',
-              fontSize: '14px',
-              fontWeight: 'bold'
-            }
-          });
-
-          // Show details on hover
-          marker.addListener('mouseover', () => showInfo(pt, marker));
-          marker.addListener('mouseout', () => infoWindow.close());
-          marker.addListener('click', () => showInfo(pt, marker));
-
+          let marker = markersByName[pt.device];
+          if (marker) {
+            marker.setPosition(pos);
+          } else {
+            // New marker
+            marker = new google.maps.Marker({
+              position: pos,
+              map,
+              icon: {
+                url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
+                scaledSize: new google.maps.Size(48, 48),
+                anchor: new google.maps.Point(24, 48),
+                labelOrigin: new google.maps.Point(24, 0)
+              },
+              label: {
+                text: pt.device,
+                color: '#ffffff',
+                fontSize: '14px',
+                fontWeight: 'bold'
+              }
+            });
+            // Hover and click events
+            marker.addListener('mouseover', () => showInfo(pt, marker));
+            marker.addListener('mouseout', () => infoWindow.close());
+            marker.addListener('click', () => showInfo(pt, marker));
+            markersByName[pt.device] = marker;
+          }
           markersArray.push(marker);
-          markersByName[pt.device] = marker;
 
+          // Populate dropdown
           const option = document.createElement('option');
           option.value = pt.device;
           option.text = pt.device;
           dropdown.appendChild(option);
+
+          // Build trail coords
+          trailCoords.push(pos);
         });
 
+        // Update cluster
         if (!markerCluster) {
           markerCluster = new MarkerClusterer(map, markersArray);
         } else {
@@ -114,17 +117,34 @@
           markerCluster.addMarkers(markersArray);
         }
 
-        if (trailVisible) updateTrail(arr);
+        // Update trail polyline path
+        if (trailVisible) {
+          if (!trailPolyline) {
+            trailPolyline = new google.maps.Polyline({
+              path: trailCoords,
+              geodesic: true,
+              strokeColor: '#00F',
+              strokeOpacity: 0.6,
+              strokeWeight: 4,
+              map
+            });
+          } else {
+            trailPolyline.setPath(trailCoords);
+            trailPolyline.setMap(map);
+          }
+        }
 
+        // First load center
         if (firstLoad) {
-          map.setCenter(arr[0].latitude ? { lat: arr[0].latitude, lng: arr[0].longitude } : CENTER_FALLBACK);
+          map.setCenter(trailCoords[0] || CENTER_FALLBACK);
           map.setZoom(INITIAL_ZOOM);
           firstLoad = false;
         }
 
+        // Dropdown change handler
         dropdown.onchange = function() {
-          const sel = markersByName[this.value];
-          if (sel) map.setCenter(sel.getPosition());
+          const selected = markersByName[this.value];
+          if (selected) map.setCenter(selected.getPosition());
         };
 
       } catch (err) {
@@ -139,30 +159,13 @@
     }
 
     function toggleTrail() {
-      if (!trailPolyline) {
-        trailCoords = [];
-        trailPolyline = new google.maps.Polyline({
-          path: trailCoords,
-          geodesic: true,
-          strokeColor: '#00F',
-          strokeOpacity: 0.6,
-          strokeWeight: 4,
-          map: map
-        });
-      }
       trailVisible = !trailVisible;
-      trailPolyline.setMap(trailVisible ? map : null);
-    }
-
-    function updateTrail(arr) {
-      trailCoords.length = 0;
-      arr.forEach(pt => trailCoords.push({ lat: pt.latitude, lng: pt.longitude }));
-      if (trailPolyline) trailPolyline.setPath(trailCoords);
+      if (trailPolyline) trailPolyline.setMap(trailVisible ? map : null);
     }
 
     function fitBounds() {
       const bounds = new google.maps.LatLngBounds();
-      markersArray.forEach(m => bounds.extend(m.getPosition()));
+      Object.values(markersByName).forEach(m => bounds.extend(m.getPosition()));
       map.fitBounds(bounds);
     }
 

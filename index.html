@@ -24,7 +24,7 @@
       padding: 5px;
     }
   </style>
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAIfCWstMFLCiR9VJMS6lePKoytUgy1qPY"></script>
+  <script src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_API_KEY"></script>
   <script src="https://unpkg.com/@googlemaps/markerclustererplus/dist/index.min.js"></script>
 </head>
 <body>
@@ -35,8 +35,8 @@
     <button onclick="fitBounds()">Fit Bounds</button>
   </div>
   <script>
-    const ENDPOINT = 'https://script.google.com/macros/s/AKfycbzUuSXVnDgNVmR3lVH9X2ovAeahJnSWCe6oQXzxPGEefBCq-AL0pMMb853zApv7KNDa/exec';
-    const INITIAL_ZOOM = 10;
+    const ENDPOINT = 'https://script.google.com/macros/s/AKfycbwgu-hYl5R4-7jHlFj78lX0kTZWtqHEEwVDxf7bYgFSYXA3uOONgm1wxwgkhU9FAD08/exec';
+    const INITIAL_ZOOM = 12;
     const CENTER_FALLBACK = { lat: 36.3526, lng: -94.2755 };
 
     let map, infoWindow, firstLoad = true;
@@ -63,7 +63,6 @@
         const arr = await res.json();
         if (!arr.length) return;
 
-        // Update or create markers
         const markersArray = [];
         const dropdown = document.getElementById('anglerDropdown');
         dropdown.innerHTML = '<option value="">-- Select Angler --</option>';
@@ -73,8 +72,8 @@
           let marker = markersByName[pt.device];
           if (marker) {
             marker.setPosition(pos);
+            marker.pt = pt;  // update latest data
           } else {
-            // New marker
             marker = new google.maps.Marker({
               position: pos,
               map,
@@ -91,25 +90,25 @@
                 fontWeight: 'bold'
               }
             });
-            // Hover and click events
-            marker.addListener('mouseover', () => showInfo(pt, marker));
+            marker.pt = pt;
+            marker.addListener('mouseover', () => showInfo(marker));
             marker.addListener('mouseout', () => infoWindow.close());
-            marker.addListener('click', () => showInfo(pt, marker));
+            marker.addListener('click', () => showInfo(marker));
             markersByName[pt.device] = marker;
           }
           markersArray.push(marker);
 
-          // Populate dropdown
+          // Dropdown
           const option = document.createElement('option');
           option.value = pt.device;
           option.text = pt.device;
           dropdown.appendChild(option);
 
-          // Build trail coords
+          // Trail coords
           trailCoords.push(pos);
         });
 
-        // Update cluster
+        // Cluster
         if (!markerCluster) {
           markerCluster = new MarkerClusterer(map, markersArray);
         } else {
@@ -117,7 +116,7 @@
           markerCluster.addMarkers(markersArray);
         }
 
-        // Update trail polyline path
+        // Trail polyline
         if (trailVisible) {
           if (!trailPolyline) {
             trailPolyline = new google.maps.Polyline({
@@ -141,7 +140,6 @@
           firstLoad = false;
         }
 
-        // Dropdown change handler
         dropdown.onchange = function() {
           const selected = markersByName[this.value];
           if (selected) map.setCenter(selected.getPosition());
@@ -152,9 +150,24 @@
       }
     }
 
-    function showInfo(pt, marker) {
+    function showInfo(marker) {
+      const pt = marker.pt;
       const when = new Date(pt.timestamp).toLocaleString();
-      infoWindow.setContent(`<div style="font-size:14px"><strong>${pt.device}</strong><br>${when}</div>`);
+      // fishCaught details
+      let fishHtml = '';
+      if (pt.fishCaught) {
+        for (const [type, count] of Object.entries(pt.fishCaught)) {
+          fishHtml += `<div>${type}: ${count}</div>`;
+        }
+      }
+      const content = `
+        <div style="font-size:14px; max-width:200px;">
+          <strong>${pt.device}</strong><br>
+          ${when}
+          <hr style="margin:4px 0;">
+          ${fishHtml}
+        </div>`;
+      infoWindow.setContent(content);
       infoWindow.open(map, marker);
     }
 

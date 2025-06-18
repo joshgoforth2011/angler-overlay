@@ -16,49 +16,37 @@
       font-size: 14px;
     }
   </style>
-  <!-- Google Maps JS -->
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAIfCWstMFLCiR9VJMS6lePKoytUgy1qPY"></script>
-  <!-- MarkerClusterer library -->
   <script src="https://unpkg.com/@googlemaps/markerclustererplus/dist/index.min.js"></script>
 </head>
 <body>
   <div id="map"></div>
   <script>
-    const ENDPOINT       = 'https://script.google.com/macros/s/AKfycbzUuSXVnDgNVmR3lVH9X2ovAeahJnSWCe6oQXzxPGEefBCq-AL0pMMb853zApv7KNDa/exec'; // e.g. https://script.google.com/macros/s/.../exec
-    const INITIAL_ZOOM   = 12;
+    const ENDPOINT = 'https://script.google.com/macros/s/AKfycbzUuSXVnDgNVmR3lVH9X2ovAeahJnSWCe6oQXzxPGEefBCq-AL0pMMb853zApv7KNDa/exec';
+    const INITIAL_ZOOM = 12;
     const CENTER_FALLBACK = { lat: 36.3526, lng: -94.2755 };
 
-    let map, marker, infoWindow;
-    let firstLoad = true;
-    const trailCoords   = [];
-    let trailPolyline   = null;
-    const markersArray  = [];
-    let markerCluster   = null;
-    let trailVisible    = false;
+    let map, markerCluster, trailPolyline = null;
+    let markersArray = [], trailCoords = [], infoWindow;
+    let trailVisible = true, firstLoad = true;
 
     function initMap() {
       map = new google.maps.Map(document.getElementById('map'), {
         center: CENTER_FALLBACK,
         zoom: INITIAL_ZOOM,
-        mapTypeId: 'hybrid',       // satellite + labels
+        mapTypeId: 'hybrid',
         disableDefaultUI: false,
-        gestureHandling: 'greedy'  // allow drag & scroll
+        gestureHandling: 'greedy'
       });
-      infoWindow = new google.maps.InfoWindow();
 
-      // Add controls
-      map.controls[google.maps.ControlPosition.TOP_LEFT].push(
-        createControl('Toggle Trail', toggleTrail)
-      );
-      map.controls[google.maps.ControlPosition.TOP_LEFT].push(
-        createControl('Fit Bounds', fitBounds)
-      );
+      infoWindow = new google.maps.InfoWindow();
+      map.controls[google.maps.ControlPosition.TOP_LEFT].push(createControl('Fit Bounds', fitBounds));
+      map.controls[google.maps.ControlPosition.TOP_LEFT].push(createControl('Toggle Trail', toggleTrail));
 
       fetchAndPlot();
-      setInterval(fetchAndPlot, 10000);  // refresh every 10s
+      setInterval(fetchAndPlot, 10000);
     }
 
-    // Build a custom button
     function createControl(label, cb) {
       const div = document.createElement('div');
       div.className = 'map-control';
@@ -67,58 +55,57 @@
       return div;
     }
 
-    // Fetch latest point & plot
     async function fetchAndPlot() {
       try {
-        const res = await fetch(`${ENDPOINT}?json=true&limit=1&t=${Date.now()}`);
+        const now = Date.now();
+        const twoHoursAgo = now - 2 * 60 * 60 * 1000;
+        const res = await fetch(`${ENDPOINT}?json=true&since=${twoHoursAgo}&t=${now}`);
         const arr = await res.json();
         if (!arr.length) return;
-        const pt  = arr[0];
-        const pos = { lat: pt.latitude, lng: pt.longitude };
 
-        // Add to trail history
-        trailCoords.push(pos);
+        // Clear markers and trails
+        markersArray.forEach(m => m.setMap(null));
+        markersArray.length = 0;
+        trailCoords.length = 0;
 
-        // Custom icon with label above
-        const icon = {
-          url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
-          scaledSize: new google.maps.Size(48, 48),
-          anchor: new google.maps.Point(24, 48),     // bottom-center
-          labelOrigin: new google.maps.Point(24, 0)  // top-center
-        };
+        arr.forEach(pt => {
+          const pos = { lat: pt.latitude, lng: pt.longitude };
+          trailCoords.push(pos);
 
-        // Create or move marker with smooth animation
-        if (marker) {
-          animateMarker(marker, pos);
-        } else {
-          marker = new google.maps.Marker({
+          const marker = new google.maps.Marker({
             position: pos,
             map,
-            icon,
-            label: {
-              text: pt.device,
-              color: '#ffffff',
-              fontSize: '14px',
-              fontWeight: 'bold'
+            icon: {
+              url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
+              scaledSize: new google.maps.Size(36, 36)
             }
           });
-          marker.addListener('click', () => showInfo(pt));
+          marker.addListener('click', () => showInfo(pt, marker));
           markersArray.push(marker);
-        }
+        });
 
-        // Update clustering
         if (!markerCluster) {
-          markerCluster = new MarkerClusterer(map, markersArray, {
-            imagePath: 'https://developers.google.com/maps/documentation/javascript/examples/markerclusterer/m'
-          });
+          markerCluster = new MarkerClusterer(map, markersArray);
         } else {
           markerCluster.clearMarkers();
           markerCluster.addMarkers(markersArray);
         }
 
-        // Center & zoom once
+        if (!trailPolyline) {
+          trailPolyline = new google.maps.Polyline({
+            path: trailCoords,
+            geodesic: true,
+            strokeColor: '#00F',
+            strokeOpacity: 0.6,
+            strokeWeight: 4
+          });
+        } else {
+          trailPolyline.setPath(trailCoords);
+        }
+        if (trailVisible) trailPolyline.setMap(map);
+
         if (firstLoad) {
-          map.setCenter(pos);
+          map.setCenter(trailCoords[trailCoords.length - 1]);
           map.setZoom(INITIAL_ZOOM);
           firstLoad = false;
         }
@@ -128,48 +115,11 @@
       }
     }
 
-    // Animate marker movement
-    function animateMarker(marker, newPos) {
-      const duration = 1000; // 1 second
-      const frames = 60;
-      const start = marker.getPosition();
-      const deltaLat = (newPos.lat - start.lat()) / frames;
-      const deltaLng = (newPos.lng - start.lng()) / frames;
-      let frame = 0;
-
-      function step() {
-        frame++;
-        const lat = start.lat() + deltaLat * frame;
-        const lng = start.lng() + deltaLng * frame;
-        marker.setPosition(new google.maps.LatLng(lat, lng));
-        if (frame < frames) {
-          requestAnimationFrame(step);
-        }
-      }
-
-      requestAnimationFrame(step);
-    }
-
-    // Toggle the trail polyline
     function toggleTrail() {
-      if (trailVisible) {
-        trailPolyline.setMap(null);
-      } else {
-        if (!trailPolyline) {
-          trailPolyline = new google.maps.Polyline({
-            path: trailCoords,
-            geodesic: true,
-            strokeColor: '#00F',
-            strokeOpacity: 0.6,
-            strokeWeight: 4
-          });
-        }
-        trailPolyline.setMap(map);
-      }
       trailVisible = !trailVisible;
+      if (trailPolyline) trailPolyline.setMap(trailVisible ? map : null);
     }
 
-    // Fit map to all markers
     function fitBounds() {
       if (!markersArray.length) return;
       const bounds = new google.maps.LatLngBounds();
@@ -177,21 +127,9 @@
       map.fitBounds(bounds);
     }
 
-    // InfoWindow on click, showing fish-caught details
-    function showInfo(pt) {
+    function showInfo(pt, marker) {
       const when = new Date(pt.timestamp).toLocaleString();
-      let fishHtml = '';
-      for (let fishType in pt.fishCaught) {
-        fishHtml += `<div>${fishType}: ${pt.fishCaught[fishType]}</div>`;
-      }
-      const content = `
-        <div style="font-size:14px; max-width:220px;">
-          <strong>${pt.device}</strong><br>
-          ${when}
-          <hr style="margin:4px 0;">
-          ${fishHtml}
-        </div>`;
-      infoWindow.setContent(content);
+      infoWindow.setContent(`<div style="font-size:14px"><strong>${pt.device}</strong><br>${when}</div>`);
       infoWindow.open(map, marker);
     }
 

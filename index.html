@@ -2,101 +2,73 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Live GPS Tracker</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Angler Overlay</title>
   <style>
-    html, body, #map {
-      height: 100%;
+    /* Make the page itself transparent and fill the container */
+    html, body {
       margin: 0;
       padding: 0;
+      width: 100%;
+      height: 100%;
+      background: transparent !important;
+      overflow: hidden;
+    }
+    /* Full-screen map */
+    #map {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
     }
   </style>
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAIfCWstMFLCiR9VJMS6lePKoytUgy1qPY"></script>
 </head>
 <body>
-<div id="map"></div>
-<script>
-  const ENDPOINT = 'https://script.google.com/macros/s/AKfycbzUuSXVnDgNVmR3lVH9X2ovAeahJnSWCe6oQXzxPGEefBCq-AL0pMMb853zApv7KNDa/exec';
-  const INITIAL_ZOOM = 13;
-  const CENTER_FALLBACK = { lat: 36.3526, lng: -94.2755 };
+  <div id="map"></div>
 
-  let map;
-  let markers = {};
-  let trailPaths = {};
+  <script>
+    let map;
+    const markers = {};
 
-  async function fetchData() {
-    const res = await fetch(`${ENDPOINT}?json=true&t=${Date.now()}`);
-    const points = await res.json();
-    if (!Array.isArray(points)) return;
+    function initMap() {
+      map = new google.maps.Map(document.getElementById("map"), {
+        center: { lat: 36.3526, lng: -94.2755 },
+        zoom: 12,
+        /* Disable all default map UI so nothing overlaps your video */
+        disableDefaultUI: true,
+        /* Optional: Prevent user panning/zooming if you like */
+        gestureHandling: 'none'
+      });
+      fetchAndUpdate();
+      setInterval(fetchAndUpdate, 15000);
+    }
 
-    const latestPositions = {};
-    const trails = {};
-
-    points.forEach(row => {
-      if (!row.device || !row.lat || !row.lon) return;
-      const key = row.device;
-      const lat = parseFloat(row.lat);
-      const lng = parseFloat(row.lon);
-
-      if (!trails[key]) trails[key] = [];
-      trails[key].push({ lat, lng });
-      latestPositions[key] = { lat, lng, timestamp: row.timestamp };
-    });
-
-    Object.keys(latestPositions).forEach(device => {
-      const pos = latestPositions[device];
-
-      // Update or create marker
-      if (markers[device]) {
-        markers[device].setPosition(pos);
-      } else {
-        markers[device] = new google.maps.Marker({
-          position: pos,
-          map,
-          title: device,
-          icon: {
-            url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
-            scaledSize: new google.maps.Size(48, 48),
-            anchor: new google.maps.Point(24, 48),
-            labelOrigin: new google.maps.Point(24, 0)
-          },
-          label: {
-            text: device,
-            color: '#ffffff',
-            fontSize: '16px',
-            fontWeight: 'bold'
+    async function fetchAndUpdate() {
+      try {
+        const res = await fetch("https://your-traccar-server.com/api/positions", {
+          headers: { 'Authorization': 'Basic ' + btoa('readOnlyUser:password') }
+        });
+        const data = await res.json();
+        data.forEach(pos => {
+          const id = pos.deviceId;
+          const latLng = { lat: pos.latitude, lng: pos.longitude };
+          if (markers[id]) {
+            markers[id].setPosition(latLng);
+          } else {
+            markers[id] = new google.maps.Marker({
+              position: latLng,
+              map: map,
+              title: `Angler ${id}`,
+              icon: "https://maps.google.com/mapfiles/ms/icons/blue-dot.png"
+            });
           }
         });
+      } catch (e) {
+        console.error("Overlay fetch error:", e);
       }
+    }
 
-      // Update or create trail polyline
-      if (trailPaths[device]) {
-        trailPaths[device].setPath(trails[device]);
-      } else {
-        trailPaths[device] = new google.maps.Polyline({
-          path: trails[device],
-          geodesic: true,
-          strokeColor: '#00BFFF',
-          strokeOpacity: 0.7,
-          strokeWeight: 3,
-          map: map
-        });
-      }
-    });
-  }
-
-  function initMap() {
-    map = new google.maps.Map(document.getElementById("map"), {
-      zoom: INITIAL_ZOOM,
-      center: CENTER_FALLBACK,
-      mapTypeId: 'hybrid'
-    });
-
-    fetchData();
-    setInterval(fetchData, 10000); // every 10 seconds
-  }
-
-  window.onload = initMap;
-</script>
+    window.onload = initMap;
+  </script>
 </body>
 </html>

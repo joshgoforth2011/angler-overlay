@@ -2,55 +2,91 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Trail Test Map</title>
+  <title>Live GPS Tracker</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    html, body, #map { margin:0; padding:0; width:100%; height:100%; }
+    html, body, #map {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
   </style>
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAIfCWstMFLCiR9VJMS6lePKoytUgy1qPY"></script>
 </head>
 <body>
-  <div id="map"></div>
-  <script>
-    const ENDPOINT = 'https://script.google.com/macros/s/AKfycbzUuSXVnDgNVmR3lVH9X2ovAeahJnSWCe6oQXzxPGEefBCq-AL0pMMb853zApv7KNDa/exec';
-    const CENTER_FALLBACK = { lat: 36.3526, lng: -94.2755 };
+<div id="map"></div>
+<script>
+  const ENDPOINT = 'https://script.google.com/macros/s/AKfycbzUuSXVnDgNVmR3lVH9X2ovAeahJnSWCe6oQXzxPGEefBCq-AL0pMMb853zApv7KNDa/exec';
+  const INITIAL_ZOOM = 13;
+  const CENTER_FALLBACK = { lat: 36.3526, lng: -94.2755 };
 
-    let map, trailPolyline;
+  let map;
+  let markers = {};
+  let trailPaths = {};
 
-    function initMap() {
-      map = new google.maps.Map(document.getElementById('map'), {
-        center: CENTER_FALLBACK,
-        zoom: 14,
-        mapTypeId: 'hybrid'
-      });
-      fetchTrail();
-    }
+  async function fetchData() {
+    const res = await fetch(`${ENDPOINT}?json=true&t=${Date.now()}`);
+    const points = await res.json();
+    if (!Array.isArray(points)) return;
 
-    async function fetchTrail() {
-      try {
-        const now = Date.now();
-        const since = new Date(now - 2 * 60 * 60 * 1000).toISOString();
-        const res = await fetch(`${ENDPOINT}?json=true&since=${encodeURIComponent(since)}&t=${now}`);
-        const data = await res.json();
-        if (!data.length) return;
+    const latestPositions = {};
+    const trails = {};
 
-        const trailCoords = data.map(pt => ({ lat: pt.latitude, lng: pt.longitude }));
+    points.forEach(row => {
+      if (!row.device || !row.latitude || !row.longitude) return;
+      const key = row.device;
+      const lat = parseFloat(row.latitude);
+      const lng = parseFloat(row.longitude);
 
-        trailPolyline = new google.maps.Polyline({
-          path: trailCoords,
-          geodesic: true,
-          strokeColor: '#00F',
-          strokeOpacity: 0.7,
-          strokeWeight: 4
+      if (!trails[key]) trails[key] = [];
+      trails[key].push({ lat, lng });
+      latestPositions[key] = { lat, lng, timestamp: row.timestamp };
+    });
+
+    Object.keys(latestPositions).forEach(device => {
+      const pos = latestPositions[device];
+
+      // Update or create marker
+      if (markers[device]) {
+        markers[device].setPosition(pos);
+      } else {
+        markers[device] = new google.maps.Marker({
+          position: pos,
+          map,
+          title: device,
+          label: device.substring(0, 3).toUpperCase(),
+          icon: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png'
         });
-
-        trailPolyline.setMap(map);
-        map.setCenter(trailCoords[trailCoords.length - 1]);
-      } catch (err) {
-        console.error('Trail fetch error', err);
       }
-    }
 
-    window.onload = initMap;
-  </script>
+      // Update or create trail polyline
+      if (trailPaths[device]) {
+        trailPaths[device].setPath(trails[device]);
+      } else {
+        trailPaths[device] = new google.maps.Polyline({
+          path: trails[device],
+          geodesic: true,
+          strokeColor: '#00BFFF',
+          strokeOpacity: 0.7,
+          strokeWeight: 3,
+          map: map
+        });
+      }
+    });
+  }
+
+  function initMap() {
+    map = new google.maps.Map(document.getElementById("map"), {
+      zoom: INITIAL_ZOOM,
+      center: CENTER_FALLBACK,
+      mapTypeId: 'hybrid'
+    });
+
+    fetchData();
+    setInterval(fetchData, 10000); // every 10 seconds
+  }
+
+  window.onload = initMap;
+</script>
 </body>
 </html>

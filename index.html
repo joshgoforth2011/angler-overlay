@@ -87,9 +87,9 @@
           labelOrigin: new google.maps.Point(24, 0)  // top-center
         };
 
-        // Create or move marker
+        // Create or move marker with smooth animation
         if (marker) {
-          marker.setPosition(pos);
+          animateMarker(marker, pos);
         } else {
           marker = new google.maps.Marker({
             position: pos,
@@ -128,6 +128,28 @@
       }
     }
 
+    // Animate marker movement
+    function animateMarker(marker, newPos) {
+      const duration = 1000; // 1 second
+      const frames = 60;
+      const start = marker.getPosition();
+      const deltaLat = (newPos.lat - start.lat()) / frames;
+      const deltaLng = (newPos.lng - start.lng()) / frames;
+      let frame = 0;
+
+      function step() {
+        frame++;
+        const lat = start.lat() + deltaLat * frame;
+        const lng = start.lng() + deltaLng * frame;
+        marker.setPosition(new google.maps.LatLng(lat, lng));
+        if (frame < frames) {
+          requestAnimationFrame(step);
+        }
+      }
+
+      requestAnimationFrame(step);
+    }
+
     // Toggle the trail polyline
     function toggleTrail() {
       if (trailVisible) {
@@ -158,7 +180,6 @@
     // InfoWindow on click, showing fish-caught details
     function showInfo(pt) {
       const when = new Date(pt.timestamp).toLocaleString();
-      // Build fishCaught HTML
       let fishHtml = '';
       for (let fishType in pt.fishCaught) {
         fishHtml += `<div>${fishType}: ${pt.fishCaught[fishType]}</div>`;

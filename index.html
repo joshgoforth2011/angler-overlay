@@ -15,6 +15,10 @@
       font-family: Arial, sans-serif;
       font-size: 14px;
     }
+    .map-control.active {
+      background-color: #007BFF;
+      color: white;
+    }
     #controls {
       position: absolute;
       bottom: 20px;
@@ -50,6 +54,7 @@
     let playbackInterval = null;
     let slider = null;
     let trailPoints = [], trailMarker = null;
+    let toggleTrailBtn = null;
 
     function initMap() {
       map = new google.maps.Map(document.getElementById('map'), {
@@ -63,7 +68,8 @@
       infoWindow = new google.maps.InfoWindow();
       slider = document.getElementById('slider');
       map.controls[google.maps.ControlPosition.TOP_LEFT].push(createControl('Fit Bounds', fitBounds));
-      map.controls[google.maps.ControlPosition.TOP_LEFT].push(createControl('Toggle Trail', toggleTrail));
+      toggleTrailBtn = createControl('Toggle Trail', toggleTrail);
+      map.controls[google.maps.ControlPosition.TOP_LEFT].push(toggleTrailBtn);
 
       fetchAndPlot();
       setInterval(fetchAndPlot, 10000);
@@ -142,6 +148,7 @@
     function toggleTrail() {
       trailVisible = !trailVisible;
       if (trailPolyline) trailPolyline.setMap(trailVisible ? map : null);
+      toggleTrailBtn.classList.toggle('active', trailVisible);
     }
 
     function fitBounds() {

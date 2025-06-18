@@ -88,21 +88,22 @@
         const now = Date.now();
         const since = new Date(now - 2 * 60 * 60 * 1000).toISOString();
         const res = await fetch(`${ENDPOINT}?json=true&since=${encodeURIComponent(since)}&t=${now}`);
-        const arr = await res.json();
-        if (!arr.length) return;
+        const data = await res.json();
+        if (!data.length) return;
 
-        markersArray.forEach(m => m.setMap(null));
-        markersArray.length = 0;
-        trailCoords.length = 0;
-        trailPoints = arr.map(pt => ({
-          pos: { lat: pt.latitude, lng: pt.longitude },
-          timestamp: pt.timestamp,
-          device: pt.device
-        }));
-        slider.max = trailPoints.length - 1;
+        const newPoints = [];
 
-        trailPoints.forEach(pt => {
-          trailCoords.push(pt.pos);
+        data.forEach(pt => {
+          const pos = { lat: pt.latitude, lng: pt.longitude };
+          const exists = trailCoords.some(coord => coord.lat === pos.lat && coord.lng === pos.lng);
+          if (!exists) {
+            trailCoords.push(pos);
+            trailPoints.push({ pos, timestamp: pt.timestamp, device: pt.device });
+            newPoints.push({ pos, timestamp: pt.timestamp, device: pt.device });
+          }
+        });
+
+        newPoints.forEach(pt => {
           const marker = new google.maps.Marker({
             position: pt.pos,
             map,
@@ -115,11 +116,11 @@
           markersArray.push(marker);
         });
 
-        if (!markerCluster) {
-          markerCluster = new MarkerClusterer(map, markersArray);
-        } else {
+        if (markerCluster) {
           markerCluster.clearMarkers();
           markerCluster.addMarkers(markersArray);
+        } else {
+          markerCluster = new MarkerClusterer(map, markersArray);
         }
 
         if (!trailPolyline) {
@@ -140,6 +141,9 @@
           map.setZoom(INITIAL_ZOOM);
           firstLoad = false;
         }
+
+        slider.max = trailPoints.length - 1;
+
       } catch (err) {
         console.error('Fetch/plot error', err);
       }

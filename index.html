@@ -6,47 +6,88 @@
   <meta name="viewport" content="initial-scale=1.0,user-scalable=no"/>
   <style>
     html, body, #map { margin:0; padding:0; width:100%; height:100%; }
+    .map-control {
+      background: #fff;
+      border: 1px solid #000;
+      margin: 10px;
+      padding: 5px 10px;
+      cursor: pointer;
+      font-family: Arial, sans-serif;
+      font-size: 14px;
+    }
   </style>
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAIfCWstMFLCiR9VJMS6lePKoytUgy1qPY"></script>
+  <!-- Google Maps JS -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_API_KEY"></script>
+  <!-- MarkerClusterer library -->
+  <script src="https://unpkg.com/@googlemaps/markerclustererplus/dist/index.min.js"></script>
 </head>
 <body>
   <div id="map"></div>
   <script>
-    const ENDPOINT     = 'https://script.google.com/macros/s/AKfycbwgu-hYl5R4-7jHlFj78lX0kTZWtqHEEwVDxf7bYgFSYXA3uOONgm1wxwgkhU9FAD08/exec';
-    const INITIAL_ZOOM = 12;
+    const ENDPOINT       = 'YOUR_SCRIPT_URL'; // e.g. https://script.google.com/macros/s/.../exec
+    const INITIAL_ZOOM   = 12;
     const CENTER_FALLBACK = { lat: 36.3526, lng: -94.2755 };
 
     let map, marker, infoWindow;
     let firstLoad = true;
+    const trailCoords   = [];
+    let trailPolyline   = null;
+    const markersArray  = [];
+    let markerCluster   = null;
+    let trailVisible    = false;
 
     function initMap() {
       map = new google.maps.Map(document.getElementById('map'), {
         center: CENTER_FALLBACK,
         zoom: INITIAL_ZOOM,
-        mapTypeId: 'hybrid',        // <-- hybrid: satellite + labels
+        mapTypeId: 'hybrid',       // satellite + labels
         disableDefaultUI: false,
-        gestureHandling: 'none'
+        gestureHandling: 'greedy'  // allow drag & scroll
       });
       infoWindow = new google.maps.InfoWindow();
+
+      // Add controls
+      map.controls[google.maps.ControlPosition.TOP_LEFT].push(
+        createControl('Toggle Trail', toggleTrail)
+      );
+      map.controls[google.maps.ControlPosition.TOP_LEFT].push(
+        createControl('Fit Bounds', fitBounds)
+      );
+
       fetchAndPlot();
-      setInterval(fetchAndPlot, 10000);
+      setInterval(fetchAndPlot, 10000);  // refresh every 10s
     }
 
+    // Build a custom button
+    function createControl(label, cb) {
+      const div = document.createElement('div');
+      div.className = 'map-control';
+      div.textContent = label;
+      div.addEventListener('click', cb);
+      return div;
+    }
+
+    // Fetch latest point & plot
     async function fetchAndPlot() {
       try {
-        const url = `${ENDPOINT}?json=true&limit=1&t=${Date.now()}`;
-        const res = await fetch(url);
+        const res = await fetch(`${ENDPOINT}?json=true&limit=1&t=${Date.now()}`);
         const arr = await res.json();
         if (!arr.length) return;
         const pt  = arr[0];
         const pos = { lat: pt.latitude, lng: pt.longitude };
 
-        // build a larger icon
+        // Add to trail history
+        trailCoords.push(pos);
+
+        // Custom icon with label above
         const icon = {
           url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
-          scaledSize: new google.maps.Size(48, 48)  // 48×48 px
+          scaledSize: new google.maps.Size(48, 48),
+          anchor: new google.maps.Point(24, 48),     // bottom-center
+          labelOrigin: new google.maps.Point(24, 0)  // top-center
         };
 
+        // Create or move marker
         if (marker) {
           marker.setPosition(pos);
         } else {
@@ -55,34 +96,79 @@
             map,
             icon,
             label: {
-              text: pt.device,      // show device name
+              text: pt.device,
               color: '#ffffff',
-              fontWeight: 'bold',
-              fontSize: '14px'
+              fontSize: '14px',
+              fontWeight: 'bold'
             }
           });
-          marker.addListener('click', () => showInfo(pt, marker));
+          marker.addListener('click', () => showInfo(pt));
+          markersArray.push(marker);
         }
 
+        // Update clustering
+        if (!markerCluster) {
+          markerCluster = new MarkerClusterer(map, markersArray, {
+            imagePath: 'https://developers.google.com/maps/documentation/javascript/examples/markerclusterer/m'
+          });
+        } else {
+          markerCluster.clearMarkers();
+          markerCluster.addMarkers(markersArray);
+        }
+
+        // Center & zoom once
         if (firstLoad) {
           map.setCenter(pos);
           map.setZoom(INITIAL_ZOOM);
           firstLoad = false;
         }
 
-        showInfo(pt, marker);
-
       } catch (err) {
         console.error('Fetch/plot error', err);
       }
     }
 
-    function showInfo(pt, marker) {
-      const time = new Date(pt.timestamp).toLocaleString();
+    // Toggle the trail polyline
+    function toggleTrail() {
+      if (trailVisible) {
+        trailPolyline.setMap(null);
+      } else {
+        if (!trailPolyline) {
+          trailPolyline = new google.maps.Polyline({
+            path: trailCoords,
+            geodesic: true,
+            strokeColor: '#00F',
+            strokeOpacity: 0.6,
+            strokeWeight: 4
+          });
+        }
+        trailPolyline.setMap(map);
+      }
+      trailVisible = !trailVisible;
+    }
+
+    // Fit map to all markers
+    function fitBounds() {
+      if (!markersArray.length) return;
+      const bounds = new google.maps.LatLngBounds();
+      markersArray.forEach(m => bounds.extend(m.getPosition()));
+      map.fitBounds(bounds);
+    }
+
+    // InfoWindow on click, showing fish-caught details
+    function showInfo(pt) {
+      const when = new Date(pt.timestamp).toLocaleString();
+      // Build fishCaught HTML
+      let fishHtml = '';
+      for (let fishType in pt.fishCaught) {
+        fishHtml += `<div>${fishType}: ${pt.fishCaught[fishType]}</div>`;
+      }
       const content = `
-        <div style="font-size:14px;">
+        <div style="font-size:14px; max-width:220px;">
           <strong>${pt.device}</strong><br>
-          ${time}
+          ${when}
+          <hr style="margin:4px 0;">
+          ${fishHtml}
         </div>`;
       infoWindow.setContent(content);
       infoWindow.open(map, marker);
@@ -92,4 +178,5 @@
   </script>
 </body>
 </html>
+
 

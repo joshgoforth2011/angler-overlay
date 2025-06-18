@@ -6,199 +6,45 @@
   <meta name="viewport" content="initial-scale=1.0,user-scalable=no"/>
   <style>
     html, body, #map { margin:0; padding:0; width:100%; height:100%; }
-    .map-control {
-      background: #fff;
-      border: 1px solid #000;
-      margin: 10px;
-      padding: 5px 10px;
-      cursor: pointer;
-      font-family: Arial, sans-serif;
-      font-size: 14px;
-    }
-    .map-control.active {
-      background-color: #007BFF;
-      color: white;
-    }
-    #controls {
-      position: absolute;
-      bottom: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(255,255,255,0.8);
-      padding: 10px;
-      border-radius: 6px;
-      display: flex;
-      gap: 10px;
-      z-index: 5;
-    }
   </style>
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAIfCWstMFLCiR9VJMS6lePKoytUgy1qPY"></script>
-  <script src="https://unpkg.com/@googlemaps/markerclustererplus/dist/index.min.js"></script>
 </head>
 <body>
   <div id="map"></div>
-  <div id="controls">
-    <button onclick="startPlayback()">Play</button>
-    <button onclick="pausePlayback()">Pause</button>
-    <input id="slider" type="range" min="0" max="0" value="0" step="1" style="width: 300px;">
-  </div>
   <script>
     const ENDPOINT = 'https://script.google.com/macros/s/AKfycbzUuSXVnDgNVmR3lVH9X2ovAeahJnSWCe6oQXzxPGEefBCq-AL0pMMb853zApv7KNDa/exec';
-    const INITIAL_ZOOM = 12;
-    const CENTER_FALLBACK = { lat: 36.3526, lng: -94.2755 };
 
-    let map, markerCluster, trailPolyline = null;
-    let markersArray = [], trailCoords = [], infoWindow;
-    let trailVisible = true, firstLoad = true;
-
-    let playbackInterval = null;
-    let slider = null;
-    let trailPoints = [], trailMarker = null;
-    let toggleTrailBtn = null;
+    let map, trailPolyline;
 
     function initMap() {
       map = new google.maps.Map(document.getElementById('map'), {
-        center: CENTER_FALLBACK,
-        zoom: INITIAL_ZOOM,
-        mapTypeId: 'hybrid',
-        disableDefaultUI: false,
-        gestureHandling: 'greedy'
+        center: { lat: 36.3526, lng: -94.2755 },
+        zoom: 14,
+        mapTypeId: 'hybrid'
       });
 
-      infoWindow = new google.maps.InfoWindow();
-      slider = document.getElementById('slider');
-      map.controls[google.maps.ControlPosition.TOP_LEFT].push(createControl('Fit Bounds', fitBounds));
-      toggleTrailBtn = createControl('Toggle Trail', toggleTrail);
-      map.controls[google.maps.ControlPosition.TOP_LEFT].push(toggleTrailBtn);
-
-      fetchAndPlot();
-      setInterval(fetchAndPlot, 10000);
+      fetchTrail();
     }
 
-    function createControl(label, cb) {
-      const div = document.createElement('div');
-      div.className = 'map-control';
-      div.textContent = label;
-      div.addEventListener('click', cb);
-      return div;
-    }
+    async function fetchTrail() {
+      const now = Date.now();
+      const since = new Date(now - 2 * 60 * 60 * 1000).toISOString();
+      const res = await fetch(`${ENDPOINT}?json=true&since=${encodeURIComponent(since)}&t=${now}`);
+      const data = await res.json();
+      if (!data.length) return;
 
-    async function fetchAndPlot() {
-      try {
-        const now = Date.now();
-        const since = new Date(now - 2 * 60 * 60 * 1000).toISOString();
-        const res = await fetch(`${ENDPOINT}?json=true&since=${encodeURIComponent(since)}&t=${now}`);
-        const data = await res.json();
-        if (!data.length) return;
+      const trailCoords = data.map(pt => ({ lat: pt.latitude, lng: pt.longitude }));
+      trailPolyline = new google.maps.Polyline({
+        path: trailCoords,
+        geodesic: true,
+        strokeColor: '#00F',
+        strokeOpacity: 0.7,
+        strokeWeight: 4,
+        map: map
+      });
 
-        const newPoints = [];
-
-        data.forEach(pt => {
-          const pos = { lat: pt.latitude, lng: pt.longitude };
-          const exists = trailCoords.some(coord => coord.lat === pos.lat && coord.lng === pos.lng);
-          if (!exists) {
-            trailCoords.push(pos);
-            trailPoints.push({ pos, timestamp: pt.timestamp, device: pt.device });
-            newPoints.push({ pos, timestamp: pt.timestamp, device: pt.device });
-          }
-        });
-
-        newPoints.forEach(pt => {
-          const marker = new google.maps.Marker({
-            position: pt.pos,
-            map,
-            icon: {
-              url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
-              scaledSize: new google.maps.Size(36, 36)
-            }
-          });
-          marker.addListener('click', () => showInfo(pt, marker));
-          markersArray.push(marker);
-        });
-
-        if (markerCluster) {
-          markerCluster.clearMarkers();
-          markerCluster.addMarkers(markersArray);
-        } else {
-          markerCluster = new MarkerClusterer(map, markersArray);
-        }
-
-        if (!trailPolyline) {
-          trailPolyline = new google.maps.Polyline({
-            path: trailCoords,
-            geodesic: true,
-            strokeColor: '#00F',
-            strokeOpacity: 0.6,
-            strokeWeight: 4
-          });
-        } else {
-          trailPolyline.setPath(trailCoords);
-        }
-        if (trailVisible) trailPolyline.setMap(map);
-
-        if (firstLoad) {
-          map.setCenter(trailCoords[trailCoords.length - 1]);
-          map.setZoom(INITIAL_ZOOM);
-          firstLoad = false;
-        }
-
-        slider.max = trailPoints.length - 1;
-
-      } catch (err) {
-        console.error('Fetch/plot error', err);
-      }
-    }
-
-    function toggleTrail() {
-      trailVisible = !trailVisible;
-      if (trailPolyline) trailPolyline.setMap(trailVisible ? map : null);
-      toggleTrailBtn.classList.toggle('active', trailVisible);
-    }
-
-    function fitBounds() {
-      if (!markersArray.length) return;
-      const bounds = new google.maps.LatLngBounds();
-      markersArray.forEach(m => bounds.extend(m.getPosition()));
-      map.fitBounds(bounds);
-    }
-
-    function showInfo(pt, marker) {
-      const when = new Date(pt.timestamp).toLocaleString();
-      infoWindow.setContent(`<div style="font-size:14px"><strong>${pt.device}</strong><br>${when}</div>`);
-      infoWindow.open(map, marker);
-    }
-
-    function startPlayback() {
-      if (playbackInterval || !trailPoints.length) return;
-      if (!trailMarker) {
-        trailMarker = new google.maps.Marker({
-          map,
-          icon: {
-            url: 'https://maps.google.com/mapfiles/ms/icons/red-dot.png',
-            scaledSize: new google.maps.Size(40, 40)
-          }
-        });
-      }
-      let i = parseInt(slider.value);
-      playbackInterval = setInterval(() => {
-        if (i >= trailPoints.length) {
-          clearInterval(playbackInterval);
-          playbackInterval = null;
-          return;
-        }
-        const pt = trailPoints[i];
-        trailMarker.setPosition(pt.pos);
-        map.setCenter(pt.pos);
-        slider.value = i;
-        i++;
-      }, 500);
-    }
-
-    function pausePlayback() {
-      if (playbackInterval) {
-        clearInterval(playbackInterval);
-        playbackInterval = null;
-      }
+      // Focus on the last known point
+      map.setCenter(trailCoords[trailCoords.length - 1]);
     }
 
     window.onload = initMap;

@@ -33,10 +33,10 @@
     const trails = {};
 
     points.forEach(row => {
-      if (!row.device || !row.latitude || !row.longitude) return;
+      if (!row.device || !row.lat || !row.lon) return;
       const key = row.device;
-      const lat = parseFloat(row.latitude);
-      const lng = parseFloat(row.longitude);
+      const lat = parseFloat(row.lat);
+      const lng = parseFloat(row.lon);
 
       if (!trails[key]) trails[key] = [];
       trails[key].push({ lat, lng });
@@ -54,8 +54,18 @@
           position: pos,
           map,
           title: device,
-          label: device.substring(0, 3).toUpperCase(),
-          icon: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png'
+          icon: {
+            url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
+            scaledSize: new google.maps.Size(48, 48),
+            anchor: new google.maps.Point(24, 48),
+            labelOrigin: new google.maps.Point(24, 0)
+          },
+          label: {
+            text: device,
+            color: '#ffffff',
+            fontSize: '16px',
+            fontWeight: 'bold'
+          }
         });
       }
 

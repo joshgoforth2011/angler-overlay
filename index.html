@@ -51,8 +51,15 @@
       map.controls[google.maps.ControlPosition.TOP_LEFT].push(createControl('Download KML', downloadKML));
       setupPlaybackUI();
       populateFromURL();
+
+      // Load all historical data
       await fetchAllHistory();
+      // Initialize polylines & markers now that we have data
       initPolylinesAndMarkers();
+      // Render initial view
+      updatePlayback();
+
+      // Start live updates and playback loop
       startLiveUpdates();
       playInterval = setInterval(nextFrame, 1000);
     }
@@ -73,11 +80,18 @@
     function updateSlider() {
       const s = document.getElementById('timeSlider'); s.max = getGlobalLength()-1; if(playbackIndex>+s.max) playbackIndex=+s.max; s.value=playbackIndex;
     }
-    function updateTimeLabel() { const o = getGlobalObject(playbackIndex); if(o) document.getElementById('timeLabel').textContent = new Date(o.timestamp).toLocaleString(); }
 
-    function getGlobalLength() { return Object.values(trailData).reduce((sum,arr)=>Math.max(sum,arr.length),0); }
-    function getGlobalObject(idx) { // pick any device that has >= idx
-      for(let dev in trailData) if(trailData[dev][idx]) return trailData[dev][idx]; return null;
+    function updateTimeLabel() {
+      const o = getGlobalObject(playbackIndex);
+      if(o) document.getElementById('timeLabel').textContent = new Date(o.timestamp).toLocaleString();
+    }
+
+    function getGlobalLength() {
+      return Object.values(trailData).reduce((max,arr)=>Math.max(max,arr.length),0);
+    }
+    function getGlobalObject(idx) {
+      for(const dev in trailData) if(trailData[dev][idx]) return trailData[dev][idx];
+      return null;
     }
 
     function updatePlayback() {
@@ -89,96 +103,112 @@
       updateSlider(); updateTimeLabel(); updateURL();
     }
 
-    function nextFrame(){ if(playbackIndex<getGlobalLength()-1){ playbackIndex++; updatePlayback(); }}
+    function nextFrame(){ if(playbackIndex < getGlobalLength()-1){ playbackIndex++; updatePlayback(); }}
 
     async function fetchAllHistory() {
-      const res = await fetch(`${ENDPOINT}?json=true&limit=1000&t=${Date.now()}`);
-      const arr = await res.json(); if(!arr.length) return;
-      arr.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp));
-      let lastByDev={};
-      arr.forEach(pt=>{
-        const dev=pt.device, coord={lat:pt.latitude,lng:pt.longitude,timestamp:pt.timestamp,fishCaught:pt.fishCaught};
-        lastByDev[dev] = lastByDev[dev]||null;
-        if(!lastByDev[dev]||distanceFeet(lastByDev[dev],coord)>MIN_DISTANCE){
-          (trailData[dev]=trailData[dev]||[]).push(coord);
-          lastByDev[dev]=coord;
-        }
-      });
-      buildLegend();
-      playbackIndex = getGlobalLength()-1;
-      updateSlider(); updatePlayback();
+      try {
+        const res = await fetch(`${ENDPOINT}?json=true&limit=1000&t=${Date.now()}`);
+        const arr = await res.json(); if(!arr.length) return;
+        arr.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp));
+        let lastByDev = {};
+        arr.forEach(pt=>{
+          const dev = pt.device;
+          const coord = {lat:pt.latitude, lng:pt.longitude, timestamp:pt.timestamp, fishCaught: pt.fishCaught};
+          if(!lastByDev[dev] || distanceFeet(lastByDev[dev], coord) > MIN_DISTANCE) {
+            (trailData[dev] = trailData[dev]||[]).push(coord);
+            lastByDev[dev] = coord;
+          }
+        });
+        buildLegend();
+        playbackIndex = getGlobalLength()-1;
+        updateSlider();
+      } catch(e) { console.error('Error loading history', e); }
     }
 
     function initPolylinesAndMarkers() {
-      let i=0;
+      let i = 0;
       for(const dev in trailData){
-        const color = COLORS[i%COLORS.length];
-        polylines[dev] = new google.maps.Polyline({path:[],geodesic:true,strokeColor:color,strokeOpacity:0.7,strokeWeight:4,map:map});
-        markers[dev] = new google.maps.Marker({map, icon:{path:google.maps.SymbolPath.CIRCLE,scale:8,fillColor:color,fillOpacity:1,strokeColor:'#000',strokeWeight:1}, label:{text:dev,color:'#fff',fontSize:'12px'}, title:dev});
-        markers[dev].addListener('click',()=>showInfo(dev, playbackIndex));
+        const color = COLORS[i % COLORS.length];
+        polylines[dev] = new google.maps.Polyline({path:[], geodesic:true, strokeColor:color, strokeOpacity:0.7, strokeWeight:4, map:map});
+        markers[dev] = new google.maps.Marker({
+          map,
+          icon:{path:google.maps.SymbolPath.CIRCLE, scale:8, fillColor:color, fillOpacity:1, strokeColor:'#000', strokeWeight:1},
+          label:{text:dev, color:'#fff', fontSize:'12px'},
+          title:dev
+        });
+        markers[dev].addListener('click', ()=>showInfo(dev, playbackIndex));
         i++;
       }
     }
 
-    function startLiveUpdates() { setInterval(async()=>{
-      const res=await fetch(`${ENDPOINT}?json=true&limit=10&t=${Date.now()}`);
-      const arr=await res.json(); arr.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp));
-      arr.forEach(pt=>{
-        const dev=pt.device, coord={lat:pt.latitude,lng:pt.longitude,timestamp:pt.timestamp,fishCaught:pt.fishCaught};
-        const list=trailData[dev]||[];
-        const last=list[list.length-1];
-        if(!last||distanceFeet(last,coord)>MIN_DISTANCE){ list.push(coord); }
-      });
-      // auto-follow live
-      if(playbackIndex>=getGlobalLength()-2) playbackIndex=getGlobalLength()-1;
-      updateSlider(); if(playbackIndex===getGlobalLength()-1) updatePlayback();
-    },UPDATE_INTERVAL);
+    function startLiveUpdates() {
+      setInterval(async ()=>{
+        try {
+          const res = await fetch(`${ENDPOINT}?json=true&limit=10&t=${Date.now()}`);
+          const arr = await res.json(); arr.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp));
+          arr.forEach(pt=>{
+            const dev = pt.device;
+            const coord = {lat:pt.latitude, lng:pt.longitude, timestamp:pt.timestamp, fishCaught:pt.fishCaught};
+            const list = trailData[dev]||[];
+            const last = list[list.length-1];
+            if(!last || distanceFeet(last, coord) > MIN_DISTANCE) list.push(coord);
+          });
+          if(playbackIndex >= getGlobalLength()-2) playbackIndex = getGlobalLength()-1;
+          updateSlider(); if(playbackIndex === getGlobalLength()-1) updatePlayback();
+        } catch(e) { console.error('Live update error', e); }
+      }, UPDATE_INTERVAL);
     }
 
-    function buildLegend(){ const legend=document.getElementById('legend'); legend.innerHTML='<strong>Devices</strong><br>';
-      let i=0;
-      for(const dev in trailData){ const color=COLORS[i%COLORS.length];
-        const row=document.createElement('div');
-        const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=true;
-        cb.addEventListener('change',()=>{ polylines[dev].setMap(cb.checked?map:null); markers[dev].setMap(cb.checked?map:null); });
-        const lbl=document.createElement('span'); lbl.textContent=` ${dev}`; lbl.style.color=color;
-        row.appendChild(cb); row.appendChild(lbl); legend.appendChild(row);
+    function buildLegend() {
+      const legend = document.getElementById('legend'); legend.innerHTML = '<strong>Devices</strong><br>';
+      let i = 0;
+      for(const dev in trailData){
+        const color = COLORS[i % COLORS.length];
+        const row = document.createElement('div');
+        const cb = document.createElement('input'); cb.type='checkbox'; cb.checked=true;
+        cb.addEventListener('change', ()=>{ polylines[dev].setMap(cb.checked?map:null); markers[dev].setMap(cb.checked?map:null); });
+        const lbl = document.createElement('span'); lbl.textContent = ` ${dev}`; lbl.style.color = color;
+        row.appendChild(cb); row.appendChild(lbl);
+        legend.appendChild(row);
         i++;
       }
     }
 
-    function toggleAllTrails(){ let anyVisible=false;
-      for(const dev in polylines) if(polylines[dev].getMap()) anyVisible=true;
-      for(const dev in polylines) polylines[dev].setMap(anyVisible?null:map);
-      toggleBtn.textContent=anyVisible?'Show All Trails':'Hide All Trails'; toggleBtn.classList.toggle('active',!anyVisible);
+    function toggleAllTrails() {
+      let anyVisible = false;
+      for(const dev in polylines) if(polylines[dev].getMap()) anyVisible = true;
+      for(const dev in polylines) polylines[dev].setMap(anyVisible ? null : map);
+      toggleBtn.textContent = anyVisible ? 'Show All Trails' : 'Hide All Trails';
+      toggleBtn.classList.toggle('active', !anyVisible);
     }
 
-    function downloadKML(){
-      let kml = `<?xml version="1.0" encoding="UTF-8"?>
-<kml xmlns="http://www.opengis.net/kml/2.2">
-<Document><name>Angler Trails</name>`;
-      for(const dev in trailData){ kml+=`<Placemark><name>${dev}</name><LineString><tessellate>1</tessellate><coordinates>`;
-        trailData[dev].forEach(o=>{ kml+=`${o.lng},${o.lat},0 `; });
-        kml+=`</coordinates></LineString></Placemark>`;
+    function downloadKML() {
+      let kml = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document><name>Angler Trails</name>`;
+      for(const dev in trailData){
+        kml += `<Placemark><name>${dev}</name><LineString><tessellate>1</tessellate><coordinates>`;
+        trailData[dev].forEach(o=>{ kml += `${o.lng},${o.lat},0 `; });
+        kml += `</coordinates></LineString></Placemark>`;
       }
-      kml+='</Document></kml>';
-      const blob=new Blob([kml],{type:'application/vnd.google-earth.kml+xml'});
-      const url=URL.createObjectURL(blob);
-      const a=document.createElement('a'); a.href=url; a.download='angler_trails.kml'; a.click(); URL.revokeObjectURL(url);
+      kml += `</Document></kml>`;
+      const blob = new Blob([kml], {type:'application/vnd.google-earth.kml+xml'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'angler_trails.kml'; a.click(); URL.revokeObjectURL(url);
     }
 
-    function showInfo(device, idx){
-      const pt = trailData[device][idx]; if(!pt) return;
-      let fishHtml=''; for(const k in pt.fishCaught) fishHtml+=`<div>${k}: ${pt.fishCaught[k]}</div>`;
-      const content=`<div style="font-size:14px;max-width:220px;"><strong>${device}</strong><br>${new Date(pt.timestamp).toLocaleString()}<hr style="margin:4px 0;">${fishHtml}</div>`;
-      infoWindow.setContent(content); infoWindow.open(map, markers[device]);
+    function showInfo(dev, idx) {
+      const pt = trailData[dev][idx]; if(!pt) return;
+      let fishHtml = '';
+      for(const k in pt.fishCaught) fishHtml += `<div>${k}: ${pt.fishCaught[k]}</div>`;
+      const content = `<div style="font-size:14px;max-width:220px;"><strong>${dev}</strong><br>${new Date(pt.timestamp).toLocaleString()}<hr style="margin:4px 0;">${fishHtml}</div>`;
+      infoWindow.setContent(content);
+      infoWindow.open(map, markers[dev]);
     }
 
-    function updateURL(){ const o=getGlobalObject(playbackIndex); if(!o) return; const t=new Date(o.timestamp).getTime(); history.replaceState(null,'',`?t=${t}`); }
-    function populateFromURL(){ const params=new URLSearchParams(window.location.search); const t=parseInt(params.get('t')); if(t){ playbackIndex=0; for(const dev in trailData){ trailData[dev].forEach((o,i)=>{ if(new Date(o.timestamp).getTime()<=t) playbackIndex=Math.max(playbackIndex,i); }); } }}
+    function updateURL() { const o = getGlobalObject(playbackIndex); if(!o) return; const t = new Date(o.timestamp).getTime(); history.replaceState(null,'', `?t=${t}`); }
+    function populateFromURL() { const params = new URLSearchParams(window.location.search); const t = parseInt(params.get('t')); if(t) { playbackIndex = 0; for(const dev in trailData) { trailData[dev].forEach((o,i)=>{ if(new Date(o.timestamp).getTime() <= t) playbackIndex = Math.max(playbackIndex, i); }); } } }
 
-    function distanceFeet(a,b){ const m=google.maps.geometry.spherical.computeDistanceBetween(new google.maps.LatLng(a.lat,a.lng),new google.maps.LatLng(b.lat,b.lng)); return m*3.28084; }
-    function fitBounds(){ const bounds=new google.maps.LatLngBounds(); for(const dev in trailData) trailData[dev].forEach(o=>bounds.extend({lat:o.lat,lng:o.lng})); map.fitBounds(bounds); }
+    function distanceFeet(a,b){ const m = google.maps.geometry.spherical.computeDistanceBetween(new google.maps.LatLng(a.lat,a.lng), new google.maps.LatLng(b.lat,b.lng)); return m * 3.28084; }
+    function fitBounds(){ const bounds = new google.maps.LatLngBounds(); for(const dev in trailData) trailData[dev].forEach(o=>bounds.extend({lat:o.lat,lng:o.lng})); map.fitBounds(bounds); }
   </script>
 </body>
 </html>

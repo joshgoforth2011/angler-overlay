@@ -30,7 +30,7 @@
     const CENTER_FALLBACK = { lat: 36.3526, lng: -94.2755 };
     const MIN_DISTANCE = 50; // feet
     const UPDATE_INTERVAL = 10000; // ms
-    const COLORS = ['#e6194b','#3cb44b','#ffe119','#4363d8','#f58231','#911eb4','#46f0f0','#f032e6'];
+    const COLORS = ['#0000FF','#FF0000','#00FF00','#FFFF00','#FFA500','#800080','#00FFFF','#FFC0CB']; // blue, red, green, yellow, orange, purple, cyan, pink
 
     let map, infoWindow;
     let toggleBtn;
@@ -129,11 +129,11 @@
       let i = 0;
       for(const dev in trailData){
         const color = COLORS[i % COLORS.length];
-        polylines[dev] = new google.maps.Polyline({path:[], geodesic:true, strokeColor:color, strokeOpacity:0.7, strokeWeight:4, map:map});
+        polylines[dev] = new google.maps.Polyline({path:[], geodesic:true, strokeColor:color, strokeOpacity:0.7, strokeWeight:5, map:map});
         markers[dev] = new google.maps.Marker({
           map,
-          icon:{path:google.maps.SymbolPath.CIRCLE, scale:8, fillColor:color, fillOpacity:1, strokeColor:'#000', strokeWeight:1},
-          label:{text:dev, color:'#fff', fontSize:'12px'},
+          icon:{path:google.maps.SymbolPath.CIRCLE, scale:14, fillColor:color, fillOpacity:1, strokeColor:'#000', strokeWeight:2},
+          label:{text:dev, color:'#fff', fontSize:'16px', fontWeight:'bold'},
           title:dev
         });
         markers[dev].addListener('click', ()=>showInfo(dev, playbackIndex));

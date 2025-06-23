@@ -55,11 +55,11 @@
 
     let map;
     let infoWindow;
-    let firstLoad = true;
+    let toggleBtn;
 
-    // Data
+    // Data structures
     const trailObjects = []; // {lat, lng, timestamp}
-    let trailPolyline = null;
+    let trailPolyline;
     let marker;
     let markerCluster;
     const markersArray = [];
@@ -68,8 +68,7 @@
     let playbackIndex = 0;
     let isPlaying = true;
     let playInterval;
-    const slider = document.createElement('input'); // placeholder
-    
+
     window.onload = initMap;
 
     async function initMap() {
@@ -82,7 +81,7 @@
       infoWindow = new google.maps.InfoWindow();
 
       // Add controls
-      const toggleBtn = createControl('Hide Trail', toggleTrail);
+      toggleBtn = createControl('Hide Trail', toggleTrail);
       toggleBtn.classList.add('active');
       map.controls[google.maps.ControlPosition.TOP_LEFT].push(toggleBtn);
       map.controls[google.maps.ControlPosition.TOP_LEFT].push(createControl('Fit Bounds', fitBounds));
@@ -90,30 +89,49 @@
       // Setup playback UI
       setupPlaybackUI();
 
-      // Load history
+      // Create polyline & marker before loading history
+      trailPolyline = new google.maps.Polyline({ path: [], geodesic: true, strokeColor: '#00F', strokeOpacity: 0.6, strokeWeight: 4 });
+      trailPolyline.setMap(map);
+
+      marker = new google.maps.Marker({
+        map,
+        icon: {
+          url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
+          scaledSize: new google.maps.Size(48, 48),
+          anchor: new google.maps.Point(24, 48),
+          labelOrigin: new google.maps.Point(24, 0)
+        }
+      });
+      markersArray.push(marker);
+      markerCluster = new MarkerClusterer(map, markersArray, {
+        imagePath: 'https://developers.google.com/maps/documentation/javascript/examples/markerclusterer/m'
+      });
+
+      // Load full history
       await fetchInitialTrail();
 
-      // Create polyline and marker
-      trailPolyline = new google.maps.Polyline({ path: [], geodesic: true, strokeColor: '#00F', strokeOpacity: 0.6, strokeWeight: 4 });
-      marker = new google.maps.Marker({ map, icon: { url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png', scaledSize: new google.maps.Size(48,48), anchor: new google.maps.Point(24,48), labelOrigin: new google.maps.Point(24,0) } });
-      markersArray.push(marker);
-      markerCluster = new MarkerClusterer(map, markersArray, { imagePath:'https://developers.google.com/maps/documentation/javascript/examples/markerclusterer/m' });
-
-      // Start updates
+      // Start live updates
       fetchAndPlot();
       setInterval(fetchAndPlot, UPDATE_INTERVAL);
 
-      // Start playback loop
+      // Begin playback loop
       playInterval = setInterval(nextFrame, 1000);
+    }
+
+    function createControl(label, cb) {
+      const div = document.createElement('div');
+      div.className = 'map-control';
+      div.textContent = label;
+      div.addEventListener('click', cb);
+      return div;
     }
 
     function setupPlaybackUI() {
       const playBtn = document.getElementById('playPauseBtn');
       const timeSlider = document.getElementById('timeSlider');
-      const timeLabel = document.getElementById('timeLabel');
 
       timeSlider.addEventListener('input', () => {
-        playbackIndex = parseInt(timeSlider.value, 10);
+        playbackIndex = Number(timeSlider.value);
         updateView();
       });
       playBtn.addEventListener('click', () => {
@@ -131,23 +149,20 @@
     function updateSlider() {
       const sliderEl = document.getElementById('timeSlider');
       sliderEl.max = trailObjects.length - 1;
-      if (playbackIndex >= trailObjects.length) playbackIndex = trailObjects.length - 1;
+      if (playbackIndex > sliderEl.max) playbackIndex = sliderEl.max;
       sliderEl.value = playbackIndex;
     }
 
     function updateTimeLabel() {
       const label = document.getElementById('timeLabel');
       if (!trailObjects[playbackIndex]) return;
-      const dt = new Date(trailObjects[playbackIndex].timestamp);
-      label.textContent = dt.toLocaleString();
+      label.textContent = new Date(trailObjects[playbackIndex].timestamp).toLocaleString();
     }
 
     function updateView() {
-      const slice = trailObjects.slice(0, playbackIndex + 1).map(o => ({ lat:o.lat, lng:o.lng }));
-      trailPolyline.setPath(slice);
-      if (slice.length) {
-        marker.setPosition(slice[slice.length - 1]);
-      }
+      const path = trailObjects.slice(0, playbackIndex + 1).map(o => ({ lat: o.lat, lng: o.lng }));
+      trailPolyline.setPath(path);
+      if (path.length) marker.setPosition(path[path.length - 1]);
       updateSlider();
       updateTimeLabel();
     }
@@ -164,52 +179,69 @@
         const res = await fetch(`${ENDPOINT}?json=true&limit=1000&t=${Date.now()}`);
         const arr = await res.json();
         if (!arr.length) return;
-        arr.sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
+        arr.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
         let last = null;
         arr.forEach(pt => {
-          const coord = { lat:pt.latitude, lng:pt.longitude, timestamp:pt.timestamp };
+          const coord = { lat: pt.latitude, lng: pt.longitude, timestamp: pt.timestamp };
           if (!last || distanceFeet(last, coord) > MIN_DISTANCE) {
             trailObjects.push(coord);
             last = coord;
           }
         });
-        updateSlider();
         playbackIndex = trailObjects.length - 1;
+        updateSlider();
         updateView();
-      } catch(err) { console.error(err); }
+      } catch (err) {
+        console.error('Initial fetch error:', err);
+      }
     }
 
     async function fetchAndPlot() {
       try {
         const res = await fetch(`${ENDPOINT}?json=true&limit=1&t=${Date.now()}`);
-        const arr = await res.json(); if (!arr.length) return;
+        const arr = await res.json();
+        if (!arr.length) return;
         const pt = arr[0];
-        const coord = { lat:pt.latitude, lng:pt.longitude, timestamp:pt.timestamp };
+        const coord = { lat: pt.latitude, lng: pt.longitude, timestamp: pt.timestamp };
         const last = trailObjects[trailObjects.length - 1];
         if (!last || distanceFeet(last, coord) > MIN_DISTANCE) {
           trailObjects.push(coord);
           updateSlider();
+          // if at live end, advance view
           if (playbackIndex === trailObjects.length - 2) {
             playbackIndex = trailObjects.length - 1;
             updateView();
           }
         }
-      } catch(err) { console.error(err); }
+      } catch (err) {
+        console.error('Fetch/plot error:', err);
+      }
     }
 
     function toggleTrail() {
-      const isVisible = trailPolyline.getMap();
-      if (isVisible) trailPolyline.setMap(null); else trailPolyline.setMap(map);
+      const visible = trailPolyline.getMap();
+      if (visible) {
+        trailPolyline.setMap(null);
+        toggleBtn.textContent = 'Show Trail';
+        toggleBtn.classList.remove('active');
+      } else {
+        trailPolyline.setMap(map);
+        toggleBtn.textContent = 'Hide Trail';
+        toggleBtn.classList.add('active');
+      }
     }
 
-    function distanceFeet(a,b) {
-      const m = google.maps.geometry.spherical.computeDistanceBetween(new google.maps.LatLng(a.lat,a.lng), new google.maps.LatLng(b.lat,b.lng));
-      return m * 3.28084;
+    function distanceFeet(a, b) {
+      const meters = google.maps.geometry.spherical.computeDistanceBetween(
+        new google.maps.LatLng(a.lat, a.lng),
+        new google.maps.LatLng(b.lat, b.lng)
+      );
+      return meters * 3.28084;
     }
 
     function fitBounds() {
       const bounds = new google.maps.LatLngBounds();
-      trailObjects.forEach(o => bounds.extend({ lat:o.lat, lng:o.lng }));
+      trailObjects.forEach(o => bounds.extend({ lat: o.lat, lng: o.lng }));
       map.fitBounds(bounds);
     }
 
@@ -217,14 +249,19 @@
       const when = new Date(pt.timestamp).toLocaleString();
       let fishHtml = '';
       for (let t in pt.fishCaught) fishHtml += `<div>${t}: ${pt.fishCaught[t]}</div>`;
-      const content = `<div style=
-"font-size:14px;max-width:220px;"><strong>${pt.device}</strong><br>${when}<hr style="margin:4px 0;">${fishHtml}</div>`;
+      const content = `
+        <div style="font-size:14px;max-width:220px;">
+          <strong>${pt.device}</strong><br>${when}
+          <hr style="margin:4px 0;">
+          ${fishHtml}
+        </div>`;
       infoWindow.setContent(content);
       infoWindow.open(map, marker);
     }
   </script>
 </body>
 </html>
+
 
 
 

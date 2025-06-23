@@ -57,14 +57,12 @@
 
       // Add controls
       toggleBtn = createControl('Hide Trail', toggleTrail);
-      toggleBtn.classList.add('active');
+      toggleBtn.classList.add('active'); // trail shown by default
       map.controls[google.maps.ControlPosition.TOP_LEFT].push(toggleBtn);
       map.controls[google.maps.ControlPosition.TOP_LEFT].push(createControl('Fit Bounds', fitBounds));
 
-      // Fetch historical trail points
+      // Fetch and display historical trail
       await fetchInitialTrail();
-
-      // Show trail by default
       if (trailPolyline) {
         trailPolyline.setMap(map);
       }
@@ -74,14 +72,23 @@
       setInterval(fetchAndPlot, 10000);
     }
 
+    // Load all past points from sheet
     async function fetchInitialTrail() {
       try {
-        const res = await fetch(`${ENDPOINT}?json=true&t=${Date.now()}`);
+        // request up to 1000 records; adjust limit as needed
+        const res = await fetch(`${ENDPOINT}?json=true&limit=1000&t=${Date.now()}`);
         const arr = await res.json();
         if (!arr.length) return;
+
+        // sort ascending by timestamp
+        arr.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        // build coords array
         arr.forEach(pt => {
           trailCoords.push({ lat: pt.latitude, lng: pt.longitude });
         });
+
+        // create polyline but don't map until toggle
         trailPolyline = new google.maps.Polyline({
           path: trailCoords,
           geodesic: true,
@@ -104,19 +111,20 @@
 
     async function fetchAndPlot() {
       try {
+        // fetch only the newest point
         const res = await fetch(`${ENDPOINT}?json=true&limit=1&t=${Date.now()}`);
         const arr = await res.json();
         if (!arr.length) return;
         const pt  = arr[0];
         const pos = { lat: pt.latitude, lng: pt.longitude };
 
-        // Append new to trail
+        // append to trail coords and update polyline
         trailCoords.push(pos);
         if (trailPolyline) {
           trailPolyline.setPath(trailCoords);
         }
 
-        // Marker icon
+        // marker icon
         const icon = {
           url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
           scaledSize: new google.maps.Size(48, 48),
@@ -124,7 +132,6 @@
           labelOrigin: new google.maps.Point(24, 0)
         };
 
-        // Create or move main marker
         let marker;
         if (markersArray.length) {
           marker = markersArray[0];
@@ -140,7 +147,7 @@
           markersArray.push(marker);
         }
 
-        // Cluster update
+        // update cluster
         if (!markerCluster) {
           markerCluster = new MarkerClusterer(map, markersArray, {
             imagePath: 'https://developers.google.com/maps/documentation/javascript/examples/markerclusterer/m'
@@ -150,7 +157,7 @@
           markerCluster.addMarkers(markersArray);
         }
 
-        // Center on first load
+        // center on first load
         if (firstLoad) {
           map.setCenter(pos);
           map.setZoom(INITIAL_ZOOM);
@@ -176,8 +183,11 @@
     }
 
     function fitBounds() {
-      if (!markersArray.length) return;
+      if (!trailCoords.length && !markersArray.length) return;
       const bounds = new google.maps.LatLngBounds();
+      // include all trail coords
+      trailCoords.forEach(pt => bounds.extend(pt));
+      // include marker positions too
       markersArray.forEach(m => bounds.extend(m.getPosition()));
       map.fitBounds(bounds);
     }

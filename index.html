@@ -149,7 +149,7 @@
         polylines[dev] = new google.maps.Polyline({
           path: [],
           geodesic: true,
-          strokeColor: ICON_COLORS[i % ICON_COLORS.length],
+          strokeColor: colorName,
           strokeOpacity: 0.7,
           strokeWeight: 5,
           map: map
@@ -164,7 +164,7 @@
           },
           label: {
             text: dev,
-            color: '#000',
+            color: '#fff',
             fontSize: '16px',
             fontWeight: 'bold'
           },
@@ -255,6 +255,7 @@
   </script>
 </body>
 </html>
+
 
 
 

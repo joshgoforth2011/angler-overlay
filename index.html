@@ -2,41 +2,17 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Live Angler Tracker with Playback</title>
+  <title>Live Angler Tracker - Multi-Device & KML Export</title>
   <meta name="viewport" content="initial-scale=1.0,user-scalable=no"/>
   <style>
     html, body, #map { margin:0; padding:0; width:100%; height:100%; }
-    .map-control {
-      background: #fff;
-      border: 1px solid #000;
-      margin: 10px;
-      padding: 5px 10px;
-      cursor: pointer;
-      font-family: Arial, sans-serif;
-      font-size: 14px;
-    }
-    .map-control.active {
-      background: #007bff;
-      color: #fff;
-      border-color: #0056b3;
-    }
-    #playbackControls {
-      position: absolute;
-      bottom: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(255,255,255,0.9);
-      padding: 8px;
-      border: 1px solid #000;
-      font-family: Arial, sans-serif;
-      z-index: 5;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
+    .map-control { background: #fff; border: 1px solid #000; margin: 10px; padding: 5px 10px; cursor: pointer; font-family: Arial, sans-serif; font-size: 14px; }
+    .map-control.active { background: #007bff; color: #fff; border-color: #0056b3; }
+    #legend { position: absolute; top: 10px; right: 10px; background: rgba(255,255,255,0.9); padding: 10px; border: 1px solid #000; font-family: Arial, sans-serif; font-size: 14px; z-index: 5; }
+    #playbackControls { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); background: rgba(255,255,255,0.9); padding: 8px; border: 1px solid #000; font-family: Arial, sans-serif; z-index: 5; display: flex; align-items: center; gap: 8px; }
     #timeSlider { width: 300px; }
   </style>
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAIfCWstMFLCiR9VJMS6lePKoytUgy1qPY&libraries=geometry"></script>
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAIfCWstMFLCiR9VJMS6lePKoytUgy1qPY&libraries=geometry,visualization"></script>
   <script src="https://unpkg.com/@googlemaps/markerclustererplus/dist/index.min.js"></script>
 </head>
 <body>
@@ -46,218 +22,163 @@
     <input type="range" id="timeSlider" min="0" max="0" value="0">
     <span id="timeLabel"></span>
   </div>
+  <div id="legend"><strong>Devices</strong><br></div>
   <script>
-    const ENDPOINT        = 'https://script.google.com/macros/s/AKfycbzUuSXVnDgNVmR3lVH9X2ovAeahJnSWCe6oQXzxPGEefBCq-AL0pMMb853zApv7KNDa/exec';
-    const INITIAL_ZOOM    = 12;
+    // CONFIG
+    const ENDPOINT = 'https://script.google.com/macros/s/AKfycbzUuSXVnDgNVmR3lVH9X2ovAeahJnSWCe6oQXzxPGEefBCq-AL0pMMb853zApv7KNDa/exec';
+    const INITIAL_ZOOM = 12;
     const CENTER_FALLBACK = { lat: 36.3526, lng: -94.2755 };
-    const MIN_DISTANCE    = 50; // feet
+    const MIN_DISTANCE = 50; // feet
     const UPDATE_INTERVAL = 10000; // ms
+    const COLORS = ['#e6194b','#3cb44b','#ffe119','#4363d8','#f58231','#911eb4','#46f0f0','#f032e6'];
 
-    let map;
-    let infoWindow;
+    let map, infoWindow;
     let toggleBtn;
-
-    // Data structures
-    const trailObjects = []; // {lat, lng, timestamp}
-    let trailPolyline;
-    let marker;
-    let markerCluster;
-    const markersArray = [];
-
-    // Playback state
-    let playbackIndex = 0;
-    let isPlaying = true;
-    let playInterval;
+    let playbackIndex = 0, isPlaying = true, playInterval;
+    let trailData = {};  // device -> [{lat,lng,timestamp,fishCaught}]
+    let polylines = {}, markers = {};
 
     window.onload = initMap;
 
     async function initMap() {
-      map = new google.maps.Map(document.getElementById('map'), {
-        center: CENTER_FALLBACK,
-        zoom: INITIAL_ZOOM,
-        mapTypeId: 'hybrid',
-        gestureHandling: 'greedy'
-      });
+      map = new google.maps.Map(document.getElementById('map'), {center: CENTER_FALLBACK, zoom: INITIAL_ZOOM, mapTypeId:'hybrid', gestureHandling:'greedy'});
       infoWindow = new google.maps.InfoWindow();
-
-      // Add controls
-      toggleBtn = createControl('Hide Trail', toggleTrail);
+      // Controls
+      toggleBtn = createControl('Hide All Trails', toggleAllTrails);
       toggleBtn.classList.add('active');
       map.controls[google.maps.ControlPosition.TOP_LEFT].push(toggleBtn);
       map.controls[google.maps.ControlPosition.TOP_LEFT].push(createControl('Fit Bounds', fitBounds));
-
-      // Setup playback UI
+      map.controls[google.maps.ControlPosition.TOP_LEFT].push(createControl('Download KML', downloadKML));
       setupPlaybackUI();
-
-      // Create polyline & marker before loading history
-      trailPolyline = new google.maps.Polyline({ path: [], geodesic: true, strokeColor: '#00F', strokeOpacity: 0.6, strokeWeight: 4 });
-      trailPolyline.setMap(map);
-
-      marker = new google.maps.Marker({
-        map,
-        icon: {
-          url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
-          scaledSize: new google.maps.Size(48, 48),
-          anchor: new google.maps.Point(24, 48),
-          labelOrigin: new google.maps.Point(24, 0)
-        }
-      });
-      markersArray.push(marker);
-      markerCluster = new MarkerClusterer(map, markersArray, {
-        imagePath: 'https://developers.google.com/maps/documentation/javascript/examples/markerclusterer/m'
-      });
-
-      // Load full history
-      await fetchInitialTrail();
-
-      // Start live updates
-      fetchAndPlot();
-      setInterval(fetchAndPlot, UPDATE_INTERVAL);
-
-      // Begin playback loop
+      populateFromURL();
+      await fetchAllHistory();
+      initPolylinesAndMarkers();
+      startLiveUpdates();
       playInterval = setInterval(nextFrame, 1000);
     }
 
     function createControl(label, cb) {
-      const div = document.createElement('div');
-      div.className = 'map-control';
-      div.textContent = label;
-      div.addEventListener('click', cb);
-      return div;
+      const div = document.createElement('div'); div.className='map-control'; div.textContent=label; div.addEventListener('click',cb); return div;
     }
 
     function setupPlaybackUI() {
-      const playBtn = document.getElementById('playPauseBtn');
-      const timeSlider = document.getElementById('timeSlider');
-
-      timeSlider.addEventListener('input', () => {
-        playbackIndex = Number(timeSlider.value);
-        updateView();
-      });
-      playBtn.addEventListener('click', () => {
-        if (isPlaying) {
-          clearInterval(playInterval);
-          playBtn.textContent = 'Play';
-        } else {
-          playInterval = setInterval(nextFrame, 1000);
-          playBtn.textContent = 'Pause';
-        }
-        isPlaying = !isPlaying;
+      const playBtn = document.getElementById('playPauseBtn'), timeSlider = document.getElementById('timeSlider');
+      timeSlider.addEventListener('input', ()=>{ playbackIndex = +timeSlider.value; updatePlayback(); });
+      playBtn.addEventListener('click', ()=>{
+        if(isPlaying){ clearInterval(playInterval); playBtn.textContent='Play'; } else { playInterval=setInterval(nextFrame,1000); playBtn.textContent='Pause'; }
+        isPlaying=!isPlaying;
       });
     }
 
     function updateSlider() {
-      const sliderEl = document.getElementById('timeSlider');
-      sliderEl.max = trailObjects.length - 1;
-      if (playbackIndex > sliderEl.max) playbackIndex = sliderEl.max;
-      sliderEl.value = playbackIndex;
+      const s = document.getElementById('timeSlider'); s.max = getGlobalLength()-1; if(playbackIndex>+s.max) playbackIndex=+s.max; s.value=playbackIndex;
+    }
+    function updateTimeLabel() { const o = getGlobalObject(playbackIndex); if(o) document.getElementById('timeLabel').textContent = new Date(o.timestamp).toLocaleString(); }
+
+    function getGlobalLength() { return Object.values(trailData).reduce((sum,arr)=>Math.max(sum,arr.length),0); }
+    function getGlobalObject(idx) { // pick any device that has >= idx
+      for(let dev in trailData) if(trailData[dev][idx]) return trailData[dev][idx]; return null;
     }
 
-    function updateTimeLabel() {
-      const label = document.getElementById('timeLabel');
-      if (!trailObjects[playbackIndex]) return;
-      label.textContent = new Date(trailObjects[playbackIndex].timestamp).toLocaleString();
-    }
-
-    function updateView() {
-      const path = trailObjects.slice(0, playbackIndex + 1).map(o => ({ lat: o.lat, lng: o.lng }));
-      trailPolyline.setPath(path);
-      if (path.length) marker.setPosition(path[path.length - 1]);
-      updateSlider();
-      updateTimeLabel();
-    }
-
-    function nextFrame() {
-      if (playbackIndex < trailObjects.length - 1) {
-        playbackIndex++;
-        updateView();
+    function updatePlayback() {
+      for(const dev in trailData){
+        const coords = trailData[dev].slice(0, playbackIndex+1).map(o=>({lat:o.lat,lng:o.lng}));
+        polylines[dev].setPath(coords);
+        if(coords.length) markers[dev].setPosition(coords[coords.length-1]);
       }
+      updateSlider(); updateTimeLabel(); updateURL();
     }
 
-    async function fetchInitialTrail() {
-      try {
-        const res = await fetch(`${ENDPOINT}?json=true&limit=1000&t=${Date.now()}`);
-        const arr = await res.json();
-        if (!arr.length) return;
-        arr.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-        let last = null;
-        arr.forEach(pt => {
-          const coord = { lat: pt.latitude, lng: pt.longitude, timestamp: pt.timestamp };
-          if (!last || distanceFeet(last, coord) > MIN_DISTANCE) {
-            trailObjects.push(coord);
-            last = coord;
-          }
-        });
-        playbackIndex = trailObjects.length - 1;
-        updateSlider();
-        updateView();
-      } catch (err) {
-        console.error('Initial fetch error:', err);
-      }
-    }
+    function nextFrame(){ if(playbackIndex<getGlobalLength()-1){ playbackIndex++; updatePlayback(); }}
 
-    async function fetchAndPlot() {
-      try {
-        const res = await fetch(`${ENDPOINT}?json=true&limit=1&t=${Date.now()}`);
-        const arr = await res.json();
-        if (!arr.length) return;
-        const pt = arr[0];
-        const coord = { lat: pt.latitude, lng: pt.longitude, timestamp: pt.timestamp };
-        const last = trailObjects[trailObjects.length - 1];
-        if (!last || distanceFeet(last, coord) > MIN_DISTANCE) {
-          trailObjects.push(coord);
-          updateSlider();
-          // if at live end, advance view
-          if (playbackIndex === trailObjects.length - 2) {
-            playbackIndex = trailObjects.length - 1;
-            updateView();
-          }
+    async function fetchAllHistory() {
+      const res = await fetch(`${ENDPOINT}?json=true&limit=1000&t=${Date.now()}`);
+      const arr = await res.json(); if(!arr.length) return;
+      arr.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp));
+      let lastByDev={};
+      arr.forEach(pt=>{
+        const dev=pt.device, coord={lat:pt.latitude,lng:pt.longitude,timestamp:pt.timestamp,fishCaught:pt.fishCaught};
+        lastByDev[dev] = lastByDev[dev]||null;
+        if(!lastByDev[dev]||distanceFeet(lastByDev[dev],coord)>MIN_DISTANCE){
+          (trailData[dev]=trailData[dev]||[]).push(coord);
+          lastByDev[dev]=coord;
         }
-      } catch (err) {
-        console.error('Fetch/plot error:', err);
+      });
+      buildLegend();
+      playbackIndex = getGlobalLength()-1;
+      updateSlider(); updatePlayback();
+    }
+
+    function initPolylinesAndMarkers() {
+      let i=0;
+      for(const dev in trailData){
+        const color = COLORS[i%COLORS.length];
+        polylines[dev] = new google.maps.Polyline({path:[],geodesic:true,strokeColor:color,strokeOpacity:0.7,strokeWeight:4,map:map});
+        markers[dev] = new google.maps.Marker({map, icon:{path:google.maps.SymbolPath.CIRCLE,scale:8,fillColor:color,fillOpacity:1,strokeColor:'#000',strokeWeight:1}, label:{text:dev,color:'#fff',fontSize:'12px'}, title:dev});
+        markers[dev].addListener('click',()=>showInfo(dev, playbackIndex));
+        i++;
       }
     }
 
-    function toggleTrail() {
-      const visible = trailPolyline.getMap();
-      if (visible) {
-        trailPolyline.setMap(null);
-        toggleBtn.textContent = 'Show Trail';
-        toggleBtn.classList.remove('active');
-      } else {
-        trailPolyline.setMap(map);
-        toggleBtn.textContent = 'Hide Trail';
-        toggleBtn.classList.add('active');
+    function startLiveUpdates() { setInterval(async()=>{
+      const res=await fetch(`${ENDPOINT}?json=true&limit=10&t=${Date.now()}`);
+      const arr=await res.json(); arr.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp));
+      arr.forEach(pt=>{
+        const dev=pt.device, coord={lat:pt.latitude,lng:pt.longitude,timestamp:pt.timestamp,fishCaught:pt.fishCaught};
+        const list=trailData[dev]||[];
+        const last=list[list.length-1];
+        if(!last||distanceFeet(last,coord)>MIN_DISTANCE){ list.push(coord); }
+      });
+      // auto-follow live
+      if(playbackIndex>=getGlobalLength()-2) playbackIndex=getGlobalLength()-1;
+      updateSlider(); if(playbackIndex===getGlobalLength()-1) updatePlayback();
+    },UPDATE_INTERVAL);
+    }
+
+    function buildLegend(){ const legend=document.getElementById('legend'); legend.innerHTML='<strong>Devices</strong><br>';
+      let i=0;
+      for(const dev in trailData){ const color=COLORS[i%COLORS.length];
+        const row=document.createElement('div');
+        const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=true;
+        cb.addEventListener('change',()=>{ polylines[dev].setMap(cb.checked?map:null); markers[dev].setMap(cb.checked?map:null); });
+        const lbl=document.createElement('span'); lbl.textContent=` ${dev}`; lbl.style.color=color;
+        row.appendChild(cb); row.appendChild(lbl); legend.appendChild(row);
+        i++;
       }
     }
 
-    function distanceFeet(a, b) {
-      const meters = google.maps.geometry.spherical.computeDistanceBetween(
-        new google.maps.LatLng(a.lat, a.lng),
-        new google.maps.LatLng(b.lat, b.lng)
-      );
-      return meters * 3.28084;
+    function toggleAllTrails(){ let anyVisible=false;
+      for(const dev in polylines) if(polylines[dev].getMap()) anyVisible=true;
+      for(const dev in polylines) polylines[dev].setMap(anyVisible?null:map);
+      toggleBtn.textContent=anyVisible?'Show All Trails':'Hide All Trails'; toggleBtn.classList.toggle('active',!anyVisible);
     }
 
-    function fitBounds() {
-      const bounds = new google.maps.LatLngBounds();
-      trailObjects.forEach(o => bounds.extend({ lat: o.lat, lng: o.lng }));
-      map.fitBounds(bounds);
+    function downloadKML(){
+      let kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document><name>Angler Trails</name>`;
+      for(const dev in trailData){ kml+=`<Placemark><name>${dev}</name><LineString><tessellate>1</tessellate><coordinates>`;
+        trailData[dev].forEach(o=>{ kml+=`${o.lng},${o.lat},0 `; });
+        kml+=`</coordinates></LineString></Placemark>`;
+      }
+      kml+='</Document></kml>';
+      const blob=new Blob([kml],{type:'application/vnd.google-earth.kml+xml'});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a'); a.href=url; a.download='angler_trails.kml'; a.click(); URL.revokeObjectURL(url);
     }
 
-    function showInfo(pt) {
-      const when = new Date(pt.timestamp).toLocaleString();
-      let fishHtml = '';
-      for (let t in pt.fishCaught) fishHtml += `<div>${t}: ${pt.fishCaught[t]}</div>`;
-      const content = `
-        <div style="font-size:14px;max-width:220px;">
-          <strong>${pt.device}</strong><br>${when}
-          <hr style="margin:4px 0;">
-          ${fishHtml}
-        </div>`;
-      infoWindow.setContent(content);
-      infoWindow.open(map, marker);
+    function showInfo(device, idx){
+      const pt = trailData[device][idx]; if(!pt) return;
+      let fishHtml=''; for(const k in pt.fishCaught) fishHtml+=`<div>${k}: ${pt.fishCaught[k]}</div>`;
+      const content=`<div style="font-size:14px;max-width:220px;"><strong>${device}</strong><br>${new Date(pt.timestamp).toLocaleString()}<hr style="margin:4px 0;">${fishHtml}</div>`;
+      infoWindow.setContent(content); infoWindow.open(map, markers[device]);
     }
+
+    function updateURL(){ const o=getGlobalObject(playbackIndex); if(!o) return; const t=new Date(o.timestamp).getTime(); history.replaceState(null,'',`?t=${t}`); }
+    function populateFromURL(){ const params=new URLSearchParams(window.location.search); const t=parseInt(params.get('t')); if(t){ playbackIndex=0; for(const dev in trailData){ trailData[dev].forEach((o,i)=>{ if(new Date(o.timestamp).getTime()<=t) playbackIndex=Math.max(playbackIndex,i); }); } }}
+
+    function distanceFeet(a,b){ const m=google.maps.geometry.spherical.computeDistanceBetween(new google.maps.LatLng(a.lat,a.lng),new google.maps.LatLng(b.lat,b.lng)); return m*3.28084; }
+    function fitBounds(){ const bounds=new google.maps.LatLngBounds(); for(const dev in trailData) trailData[dev].forEach(o=>bounds.extend({lat:o.lat,lng:o.lng})); map.fitBounds(bounds); }
   </script>
 </body>
 </html>

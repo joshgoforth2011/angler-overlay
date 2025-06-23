@@ -21,7 +21,8 @@
       border-color: #0056b3;
     }
   </style>
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAIfCWstMFLCiR9VJMS6lePKoytUgy1qPY"></script>
+  <!-- Include geometry library for distance calculations -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAIfCWstMFLCiR9VJMS6lePKoytUgy1qPY&libraries=geometry"></script>
   <script src="https://unpkg.com/@googlemaps/markerclustererplus/dist/index.min.js"></script>
 </head>
 <body>
@@ -30,6 +31,7 @@
     const ENDPOINT        = 'https://script.google.com/macros/s/AKfycbzUuSXVnDgNVmR3lVH9X2ovAeahJnSWCe6oQXzxPGEefBCq-AL0pMMb853zApv7KNDa/exec';
     const INITIAL_ZOOM    = 12;
     const CENTER_FALLBACK = { lat: 36.3526, lng: -94.2755 };
+    const MIN_DISTANCE    = 50; // minimum distance in feet
 
     let map;
     let infoWindow;
@@ -72,23 +74,32 @@
       setInterval(fetchAndPlot, 10000);
     }
 
-    // Load all past points from sheet
+    // Compute distance between two LatLng in feet
+    function distanceFeet(a, b) {
+      const distMeters = google.maps.geometry.spherical.computeDistanceBetween(
+        new google.maps.LatLng(a.lat, a.lng),
+        new google.maps.LatLng(b.lat, b.lng)
+      );
+      return distMeters * 3.28084;
+    }
+
+    // Load all past points from sheet, filtering close points
     async function fetchInitialTrail() {
       try {
-        // request up to 1000 records; adjust limit as needed
         const res = await fetch(`${ENDPOINT}?json=true&limit=1000&t=${Date.now()}`);
-        const arr = await res.json();
-        if (!arr.length) return;
+        const arr = await res.json(); if (!arr.length) return;
 
-        // sort ascending by timestamp
         arr.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-        // build coords array
+        let lastKeep = null;
         arr.forEach(pt => {
-          trailCoords.push({ lat: pt.latitude, lng: pt.longitude });
+          const coord = { lat: pt.latitude, lng: pt.longitude };
+          if (!lastKeep || distanceFeet(lastKeep, coord) > MIN_DISTANCE) {
+            trailCoords.push(coord);
+            lastKeep = coord;
+          }
         });
 
-        // create polyline but don't map until toggle
         trailPolyline = new google.maps.Polyline({
           path: trailCoords,
           geodesic: true,
@@ -111,20 +122,21 @@
 
     async function fetchAndPlot() {
       try {
-        // fetch only the newest point
         const res = await fetch(`${ENDPOINT}?json=true&limit=1&t=${Date.now()}`);
-        const arr = await res.json();
-        if (!arr.length) return;
-        const pt  = arr[0];
+        const arr = await res.json(); if (!arr.length) return;
+        const pt = arr[0];
         const pos = { lat: pt.latitude, lng: pt.longitude };
 
-        // append to trail coords and update polyline
-        trailCoords.push(pos);
-        if (trailPolyline) {
-          trailPolyline.setPath(trailCoords);
+        // only append if further than MIN_DISTANCE from last trail point
+        const lastPt = trailCoords[trailCoords.length - 1];
+        if (!lastPt || distanceFeet(lastPt, pos) > MIN_DISTANCE) {
+          trailCoords.push(pos);
+          if (trailPolyline) {
+            trailPolyline.setPath(trailCoords);
+          }
         }
 
-        // marker icon
+        // Marker icon
         const icon = {
           url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
           scaledSize: new google.maps.Size(48, 48),
@@ -147,7 +159,7 @@
           markersArray.push(marker);
         }
 
-        // update cluster
+        // Update cluster
         if (!markerCluster) {
           markerCluster = new MarkerClusterer(map, markersArray, {
             imagePath: 'https://developers.google.com/maps/documentation/javascript/examples/markerclusterer/m'
@@ -157,7 +169,6 @@
           markerCluster.addMarkers(markersArray);
         }
 
-        // center on first load
         if (firstLoad) {
           map.setCenter(pos);
           map.setZoom(INITIAL_ZOOM);
@@ -183,11 +194,8 @@
     }
 
     function fitBounds() {
-      if (!trailCoords.length && !markersArray.length) return;
       const bounds = new google.maps.LatLngBounds();
-      // include all trail coords
       trailCoords.forEach(pt => bounds.extend(pt));
-      // include marker positions too
       markersArray.forEach(m => bounds.extend(m.getPosition()));
       map.fitBounds(bounds);
     }
@@ -195,9 +203,7 @@
     function showInfo(pt) {
       const when = new Date(pt.timestamp).toLocaleString();
       let fishHtml = '';
-      for (let fishType in pt.fishCaught) {
-        fishHtml += `<div>${fishType}: ${pt.fishCaught[fishType]}</div>`;
-      }
+      for (let fishType in pt.fishCaught) fishHtml += `<div>${fishType}: ${pt.fishCaught[fishType]}</div>`;
       const content = `
         <div style="font-size:14px; max-width:220px;">
           <strong>${pt.device}</strong><br>

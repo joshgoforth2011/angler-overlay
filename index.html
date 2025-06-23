@@ -2,176 +2,122 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Live Angler Tracker</title>
-  <meta name="viewport" content="initial-scale=1.0,user-scalable=no"/>
+  <title>Live GPS Tracker</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <style>
-    html, body, #map { margin:0; padding:0; width:100%; height:100%; }
-    .map-control {
-      background: #fff;
-      border: 1px solid #000;
-      margin: 10px;
-      padding: 5px 10px;
-      cursor: pointer;
-      font-family: Arial, sans-serif;
-      font-size: 14px;
+    html, body, #map { height:100%; margin:0; padding:0; }
+    #controls {
+      position:absolute; bottom:20px; left:50%; transform:translateX(-50%);
+      background:rgba(255,255,255,0.9); padding:8px; border-radius:4px;
+      display:flex; gap:8px; z-index:5;
     }
+    #controls button, #controls input { font-size:14px; }
   </style>
-  <!-- Google Maps JS -->
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAIfCWstMFLCiR9VJMS6lePKoytUgy1qPY"></script>
-  <!-- MarkerClusterer library -->
-  <script src="https://unpkg.com/@googlemaps/markerclustererplus/dist/index.min.js"></script>
+  <script src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_API_KEY"></script>
 </head>
 <body>
   <div id="map"></div>
+  <div id="controls">
+    <button id="play">Play</button>
+    <button id="pause">Pause</button>
+    <input id="slider" type="range" min="0" max="0" value="0" style="width:300px"/>
+  </div>
   <script>
-    const ENDPOINT       = 'https://script.google.com/macros/s/AKfycbzUuSXVnDgNVmR3lVH9X2ovAeahJnSWCe6oQXzxPGEefBCq-AL0pMMb853zApv7KNDa/exec'; // e.g. https://script.google.com/macros/s/.../exec
-    const INITIAL_ZOOM   = 12;
-    const CENTER_FALLBACK = { lat: 36.3526, lng: -94.2755 };
+    const ENDPOINT = 'https://script.google.com/macros/s/AKfycbzUuSXVnDgNVmR3lVH9X2ovAeahJnSWCe6oQXzxPGEefBCq-AL0pMMb853zApv7KNDa/exec';
+    const INITIAL_ZOOM = 12;
+    const CENTER = { lat:36.3526, lng:-94.2755 };
 
-    let map, marker, infoWindow;
-    let firstLoad = true;
-    const trailCoords   = [];
-    let trailPolyline   = null;
-    const markersArray  = [];
-    let markerCluster   = null;
-    let trailVisible    = false;
+    let map, markers = {}, trailPaths = {}, trailData = [];
+    let trailPolyline, playbackMarker, playbackInterval;
 
+    // Initialize map & load data
     function initMap() {
       map = new google.maps.Map(document.getElementById('map'), {
-        center: CENTER_FALLBACK,
-        zoom: INITIAL_ZOOM,
-        mapTypeId: 'hybrid',       // satellite + labels
-        disableDefaultUI: false,
-        gestureHandling: 'greedy'  // allow drag & scroll
+        center:CENTER, zoom:INITIAL_ZOOM, mapTypeId:'hybrid'
       });
-      infoWindow = new google.maps.InfoWindow();
-
-      // Add controls
-      map.controls[google.maps.ControlPosition.TOP_LEFT].push(
-        createControl('Toggle Trail', toggleTrail)
-      );
-      map.controls[google.maps.ControlPosition.TOP_LEFT].push(
-        createControl('Fit Bounds', fitBounds)
-      );
-
-      fetchAndPlot();
-      setInterval(fetchAndPlot, 10000);  // refresh every 10s
+      fetchData();
+      setInterval(fetchData, 10000);
+      document.getElementById('play').onclick = startPlayback;
+      document.getElementById('pause').onclick = pausePlayback;
     }
 
-    // Build a custom button
-    function createControl(label, cb) {
-      const div = document.createElement('div');
-      div.className = 'map-control';
-      div.textContent = label;
-      div.addEventListener('click', cb);
-      return div;
-    }
-
-    // Fetch latest point & plot
-    async function fetchAndPlot() {
+    // Fetch full trail + markers
+    async function fetchData() {
       try {
-        const res = await fetch(`${ENDPOINT}?json=true&limit=1&t=${Date.now()}`);
-        const arr = await res.json();
-        if (!arr.length) return;
-        const pt  = arr[0];
-        const pos = { lat: pt.latitude, lng: pt.longitude };
+        const res = await fetch(`${ENDPOINT}?json=true&t=${Date.now()}`);
+        const pts = await res.json();
+        if (!Array.isArray(pts)) return;
+        trailData = pts;
 
-        // Add to trail history
-        trailCoords.push(pos);
-
-        // Custom icon with label above
-        const icon = {
-          url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
-          scaledSize: new google.maps.Size(48, 48),
-          anchor: new google.maps.Point(24, 48),     // bottom-center
-          labelOrigin: new google.maps.Point(24, 0)  // top-center
-        };
-
-        // Create or move marker
-        if (marker) {
-          marker.setPosition(pos);
-        } else {
-          marker = new google.maps.Marker({
-            position: pos,
-            map,
-            icon,
-            label: {
-              text: pt.device,
-              color: '#ffffff',
-              fontSize: '14px',
-              fontWeight: 'bold'
-            }
-          });
-          marker.addListener('click', () => showInfo(pt));
-          markersArray.push(marker);
-        }
-
-        // Update clustering
-        if (!markerCluster) {
-          markerCluster = new MarkerClusterer(map, markersArray, {
-            imagePath: 'https://developers.google.com/maps/documentation/javascript/examples/markerclusterer/m'
-          });
-        } else {
-          markerCluster.clearMarkers();
-          markerCluster.addMarkers(markersArray);
-        }
-
-        // Center & zoom once
-        if (firstLoad) {
-          map.setCenter(pos);
-          map.setZoom(INITIAL_ZOOM);
-          firstLoad = false;
-        }
-
-      } catch (err) {
-        console.error('Fetch/plot error', err);
-      }
-    }
-
-    // Toggle the trail polyline
-    function toggleTrail() {
-      if (trailVisible) {
-        trailPolyline.setMap(null);
-      } else {
+        // 1) Draw trail polyline
+        const path = pts.map(p=>({ lat:p.lat, lng:p.lon }));
         if (!trailPolyline) {
           trailPolyline = new google.maps.Polyline({
-            path: trailCoords,
-            geodesic: true,
-            strokeColor: '#00F',
-            strokeOpacity: 0.6,
-            strokeWeight: 4
+            path, strokeColor:'#00BFFF', strokeOpacity:0.7, strokeWeight:3, map
           });
+        } else {
+          trailPolyline.setPath(path);
         }
-        trailPolyline.setMap(map);
+
+        // 2) Update markers for latest position per device
+        const latest = {};
+        pts.forEach(p => latest[p.device] = p);
+        Object.keys(latest).forEach(d => {
+          const p = latest[d];
+          const pos = { lat:p.lat, lng:p.lon };
+          if (markers[d]) {
+            markers[d].setPosition(pos);
+          } else {
+            markers[d] = new google.maps.Marker({
+              position:pos, map, title:d,
+              icon: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png'
+            });
+            markers[d].addListener('click', ()=>{
+              new google.maps.InfoWindow()
+                .setContent(`<strong>${d}</strong><br>${new Date(p.timestamp).toLocaleString()}`)
+                .open(map, markers[d]);
+            });
+          }
+        });
+
+        // 3) Setup slider range
+        const slider = document.getElementById('slider');
+        slider.max = trailData.length - 1;
+        slider.oninput = ()=>{
+          const i = +slider.value;
+          movePlaybackMarker(i);
+        };
+
+      } catch (err) {
+        console.error('Error fetching data:',err);
       }
-      trailVisible = !trailVisible;
     }
 
-    // Fit map to all markers
-    function fitBounds() {
-      if (!markersArray.length) return;
-      const bounds = new google.maps.LatLngBounds();
-      markersArray.forEach(m => bounds.extend(m.getPosition()));
-      map.fitBounds(bounds);
-    }
-
-    // InfoWindow on click, showing fish-caught details
-    function showInfo(pt) {
-      const when = new Date(pt.timestamp).toLocaleString();
-      // Build fishCaught HTML
-      let fishHtml = '';
-      for (let fishType in pt.fishCaught) {
-        fishHtml += `<div>${fishType}: ${pt.fishCaught[fishType]}</div>`;
+    // Playback functions
+    function startPlayback() {
+      if (playbackInterval) return;
+      if (!playbackMarker) {
+        playbackMarker = new google.maps.Marker({
+          map, icon:'https://maps.google.com/mapfiles/ms/icons/red-dot.png'
+        });
       }
-      const content = `
-        <div style="font-size:14px; max-width:220px;">
-          <strong>${pt.device}</strong><br>
-          ${when}
-          <hr style="margin:4px 0;">
-          ${fishHtml}
-        </div>`;
-      infoWindow.setContent(content);
-      infoWindow.open(map, marker);
+      let i = +document.getElementById('slider').value;
+      playbackInterval = setInterval(()=>{
+        if (i >= trailData.length) return pausePlayback();
+        movePlaybackMarker(i);
+        document.getElementById('slider').value = i;
+        i++;
+      }, 500);
+    }
+    function pausePlayback() {
+      clearInterval(playbackInterval);
+      playbackInterval = null;
+    }
+    function movePlaybackMarker(i) {
+      const p = trailData[i];
+      const pos = { lat:p.lat, lng:p.lon };
+      playbackMarker.setPosition(pos);
+      map.panTo(pos);
     }
 
     window.onload = initMap;

@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Live Angler Tracker</title>
+  <title>Live Angler Tracker with Trail</title>
   <meta name="viewport" content="initial-scale=1.0,user-scalable=no"/>
   <style>
     html, body, #map { margin:0; padding:0; width:100%; height:100%; }
@@ -16,49 +16,47 @@
       font-size: 14px;
     }
   </style>
-  <!-- Google Maps JS -->
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAIfCWstMFLCiR9VJMS6lePKoytUgy1qPY"></script>
-  <!-- MarkerClusterer library -->
   <script src="https://unpkg.com/@googlemaps/markerclustererplus/dist/index.min.js"></script>
 </head>
 <body>
   <div id="map"></div>
   <script>
-    const ENDPOINT       = 'https://script.google.com/macros/s/AKfycbzUuSXVnDgNVmR3lVH9X2ovAeahJnSWCe6oQXzxPGEefBCq-AL0pMMb853zApv7KNDa/exec'; // e.g. https://script.google.com/macros/s/.../exec
-    const INITIAL_ZOOM   = 12;
-    const CENTER_FALLBACK = { lat: 36.3526, lng: -94.2755 };
+    const ENDPOINT         = 'https://script.google.com/macros/s/AKfycbzUuSXVnDgNVmR3lVH9X2ovAeahJnSWCe6oQXzxPGEefBCq-AL0pMMb853zApv7KNDa/exec';
+    const INITIAL_ZOOM     = 12;
+    const CENTER_FALLBACK  = { lat: 36.3526, lng: -94.2755 };
 
-    let map, marker, infoWindow;
+    let map;
+    let infoWindow;
     let firstLoad = true;
-    const trailCoords   = [];
-    let trailPolyline   = null;
-    const markersArray  = [];
-    let markerCluster   = null;
-    let trailVisible    = false;
+
+    // Trail data
+    const trailCoords = [];
+    let trailPolyline = null;
+    let trailVisible = false;
+
+    // Marker & cluster
+    const markersArray = [];
+    let markerCluster = null;
 
     function initMap() {
       map = new google.maps.Map(document.getElementById('map'), {
         center: CENTER_FALLBACK,
         zoom: INITIAL_ZOOM,
-        mapTypeId: 'hybrid',       // satellite + labels
+        mapTypeId: 'hybrid',
         disableDefaultUI: false,
-        gestureHandling: 'greedy'  // allow drag & scroll
+        gestureHandling: 'greedy'
       });
       infoWindow = new google.maps.InfoWindow();
 
-      // Add controls
-      map.controls[google.maps.ControlPosition.TOP_LEFT].push(
-        createControl('Toggle Trail', toggleTrail)
-      );
-      map.controls[google.maps.ControlPosition.TOP_LEFT].push(
-        createControl('Fit Bounds', fitBounds)
-      );
+      // Controls
+      map.controls[google.maps.ControlPosition.TOP_LEFT].push(createControl('Toggle Trail', toggleTrail));
+      map.controls[google.maps.ControlPosition.TOP_LEFT].push(createControl('Fit Bounds', fitBounds));
 
       fetchAndPlot();
-      setInterval(fetchAndPlot, 10000);  // refresh every 10s
+      setInterval(fetchAndPlot, 10000);
     }
 
-    // Build a custom button
     function createControl(label, cb) {
       const div = document.createElement('div');
       div.className = 'map-control';
@@ -67,28 +65,34 @@
       return div;
     }
 
-    // Fetch latest point & plot
     async function fetchAndPlot() {
       try {
+        // Fetch the latest point
         const res = await fetch(`${ENDPOINT}?json=true&limit=1&t=${Date.now()}`);
         const arr = await res.json();
         if (!arr.length) return;
-        const pt  = arr[0];
+
+        const pt = arr[0];
         const pos = { lat: pt.latitude, lng: pt.longitude };
 
-        // Add to trail history
+        // Append to trail
         trailCoords.push(pos);
+        if (trailPolyline) {
+          trailPolyline.setPath(trailCoords);
+        }
 
-        // Custom icon with label above
+        // Icon
         const icon = {
           url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
           scaledSize: new google.maps.Size(48, 48),
-          anchor: new google.maps.Point(24, 48),     // bottom-center
-          labelOrigin: new google.maps.Point(24, 0)  // top-center
+          anchor: new google.maps.Point(24, 48),
+          labelOrigin: new google.maps.Point(24, 0)
         };
 
         // Create or move marker
-        if (marker) {
+        let marker;
+        if (markersArray.length) {
+          marker = markersArray[0];
           marker.setPosition(pos);
         } else {
           marker = new google.maps.Marker({
@@ -97,7 +101,7 @@
             icon,
             label: {
               text: pt.device,
-              color: '#ffffff',
+              color: '#fff',
               fontSize: '14px',
               fontWeight: 'bold'
             }
@@ -106,7 +110,7 @@
           markersArray.push(marker);
         }
 
-        // Update clustering
+        // Cluster update
         if (!markerCluster) {
           markerCluster = new MarkerClusterer(map, markersArray, {
             imagePath: 'https://developers.google.com/maps/documentation/javascript/examples/markerclusterer/m'
@@ -116,19 +120,17 @@
           markerCluster.addMarkers(markersArray);
         }
 
-        // Center & zoom once
+        // Center on first load
         if (firstLoad) {
           map.setCenter(pos);
           map.setZoom(INITIAL_ZOOM);
           firstLoad = false;
         }
-
       } catch (err) {
         console.error('Fetch/plot error', err);
       }
     }
 
-    // Toggle the trail polyline
     function toggleTrail() {
       if (trailVisible) {
         trailPolyline.setMap(null);
@@ -147,7 +149,6 @@
       trailVisible = !trailVisible;
     }
 
-    // Fit map to all markers
     function fitBounds() {
       if (!markersArray.length) return;
       const bounds = new google.maps.LatLngBounds();
@@ -155,10 +156,8 @@
       map.fitBounds(bounds);
     }
 
-    // InfoWindow on click, showing fish-caught details
     function showInfo(pt) {
       const when = new Date(pt.timestamp).toLocaleString();
-      // Build fishCaught HTML
       let fishHtml = '';
       for (let fishType in pt.fishCaught) {
         fishHtml += `<div>${fishType}: ${pt.fishCaught[fishType]}</div>`;
@@ -171,7 +170,7 @@
           ${fishHtml}
         </div>`;
       infoWindow.setContent(content);
-      infoWindow.open(map, marker);
+      infoWindow.open(map, markersArray[0]);
     }
 
     window.onload = initMap;
